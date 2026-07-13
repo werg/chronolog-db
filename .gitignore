@@ -1,0 +1,11 @@
+node_modules/
+dist/
+coverage/
+.chronolog/
+*.log
+*.db
+*.db-shm
+*.db-wal
+*.doltlite
+.DS_Store
+

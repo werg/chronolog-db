@@ -1,0 +1,30 @@
+export const IR_TAGS = Object.freeze({
+  valueNull: 0, valueBoolean: 1, valueInt64: 2, valueDecimal: 3, valueText: 4, valueBlob: 5,
+  valueUuid: 6, valueTimestampMs: 7, valueDurationMs: 8, valueJson: 9, valueVector: 10,
+  typeBoolean: 16, typeInt64: 17, typeDecimal: 18, typeText: 19, typeBlob: 20, typeUuid: 21,
+  typeTimestampMs: 22, typeDurationMs: 23, typeJson: 24, typeVector: 25,
+  valueType: 26,
+  exprLiteral: 32, exprParameter: 33, exprColumn: 34, exprContext: 35, exprOldNew: 36,
+  exprUnary: 37, exprBinary: 38, exprConditional: 39, exprCast: 40, exprFunction: 41,
+  exprJson: 42, exprScalarSubquery: 43, exprExists: 44, exprMembership: 45, exprEntropy: 46,
+  conditionalBranch: 47,
+  relationTable: 128, relationView: 129, relationSubquery: 130, relationCte: 131,
+  relationTableFunction: 132, relationFts: 133, relationVector: 134, relationSpatial: 135,
+  relationSystem: 136, cte: 137, join: 138, projection: 139, orderTerm: 140, window: 141, compound: 142, page: 143,
+  query: 160,
+  mutationInsert: 192, mutationUpdate: 193, mutationDelete: 194, mutationUpsert: 195,
+  mutationMerge: 196, mutationStatefulCall: 197, mergeClause: 198,
+  affectedUnconstrained: 200, affectedExactly: 201, affectedAtLeast: 202, affectedAtMost: 203,
+  affectedRange: 204, objectReferenceName: 205, objectReferenceId: 206, assignment: 207,
+  preconditionAssert: 256, preconditionExpect: 257, expectedInline: 258, expectedDigest: 259,
+  resultScalar: 260, resultOrdered: 261, resultMultiset: 262, resultSet: 263, resultColumn: 264, canonicalQueryResult: 265,
+  schemaManifest: 288, schemaTable: 289, schemaIndex: 290, schemaView: 291, schemaRule: 292,
+  schemaFtsIndex: 293, schemaVectorIndex: 294, schemaSpatialIndex: 295,
+  schemaColumn: 296, constraintPrimaryKey: 297, constraintUnique: 298, constraintCheck: 299,
+  constraintForeignKey: 300, seedRow: 301,
+  executionManifest: 384, registeredFunction: 385, registeredCollation: 386, registeredModule: 387,
+  executionFeatures: 388, semanticResourceLimits: 389,
+} as const)
+
+const values = Object.values(IR_TAGS)
+if (new Set(values).size !== values.length) throw new Error('IR_TAG_REGISTRY_CONTAINS_DUPLICATES')

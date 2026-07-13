@@ -1,0 +1,13 @@
+{
+  "name": "@chronolog/rpc",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@chronolog/canonical": "workspace:*",
+    "@chronolog/ir": "workspace:*",
+    "@chronolog/node-core": "workspace:*",
+    "@chronolog/protocol": "workspace:*"
+  }
+}

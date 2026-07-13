@@ -1,0 +1,205 @@
+import { useCallback, useMemo, useState, useSyncExternalStore } from 'react'
+import {
+  ChronologRpcError,
+  ClientSchemaMismatchError,
+  type ChronologClient,
+  type LiveQueryValue,
+  type NodeStatus,
+  type Query,
+  type QueryOptions,
+  type ReplicationStatus,
+  type SettlementEvidence,
+  type StreamResource,
+  type StreamSnapshot,
+  type TransactionDraft,
+  type TransactionHandle,
+  type TransactionOptions,
+  type TransactionOutcome,
+} from '@chronolog/client'
+
+import { useChronologClient } from './context.js'
+
+const idleSnapshot = { status: 'idle', reconnectAttempt: 0 } as const
+const noSubscribe = (): (() => void) => () => undefined
+
+export function useStreamResource<T>(resource: StreamResource<T>): StreamSnapshot<T> {
+  return useSyncExternalStore(resource.subscribe, resource.getSnapshot, resource.getSnapshot)
+}
+
+function useOptionalResource<T>(resource: StreamResource<T> | undefined): StreamSnapshot<T> {
+  return useSyncExternalStore(
+    resource?.subscribe ?? noSubscribe,
+    resource?.getSnapshot ?? (() => idleSnapshot),
+    resource?.getSnapshot ?? (() => idleSnapshot),
+  )
+}
+
+export type ChronologQueryState<Row> =
+  | { readonly status: 'loading'; readonly previous?: LiveQueryValue<Row> }
+  | { readonly status: 'value'; readonly value: LiveQueryValue<Row> }
+  | { readonly status: 'reset'; readonly value: LiveQueryValue<Row>; readonly reason: string }
+  | { readonly status: 'transport_error'; readonly error: unknown; readonly previous?: LiveQueryValue<Row>; readonly retrying: boolean }
+  | { readonly status: 'query_error'; readonly error: unknown; readonly previous?: LiveQueryValue<Row> }
+  | { readonly status: 'schema_mismatch'; readonly error: ClientSchemaMismatchError; readonly previous?: LiveQueryValue<Row> }
+  | { readonly status: 'disabled' }
+
+export interface UseChronologQueryOptions extends Omit<QueryOptions, 'atRevision' | 'signal'> {
+  readonly client?: ChronologClient
+  readonly enabled?: boolean
+}
+
+export function useChronologQuery<
+  Row,
+  Mode extends 'scalar' | 'ordered' | 'multiset' | 'set',
+  Parameters = undefined,
+>(
+  query: Query<Row, Mode, Parameters>,
+  parameters?: Parameters,
+  options: UseChronologQueryOptions = {},
+): ChronologQueryState<Row> {
+  const client = useChronologClient(options.client)
+  const identity = client.queryResourceKey(query, parameters)
+  const resource = useMemo(
+    () => options.enabled === false
+      ? undefined
+      : client.liveQuery(query, parameters, {
+          ...(options.maxDisplayRows === undefined ? {} : { maxDisplayRows: options.maxDisplayRows }),
+        }),
+    // Canonical query/parameter identity deliberately replaces JavaScript object identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [client, identity, options.maxDisplayRows, options.enabled],
+  )
+  const snapshot = useOptionalResource(resource)
+  if (options.enabled === false) return { status: 'disabled' }
+  if (snapshot.status === 'ready' && snapshot.value !== undefined) {
+    return snapshot.value.type === 'reset'
+      ? { status: 'reset', value: snapshot.value, reason: snapshot.value.resetReason ?? 'subscription_rebuilt' }
+      : { status: 'value', value: snapshot.value }
+  }
+  if (snapshot.status === 'error') {
+    if (snapshot.error instanceof ClientSchemaMismatchError) {
+      return {
+        status: 'schema_mismatch',
+        error: snapshot.error,
+        ...(snapshot.value === undefined ? {} : { previous: snapshot.value }),
+      }
+    }
+    if (isTransportError(snapshot.error)) {
+      return {
+        status: 'transport_error',
+        error: snapshot.error,
+        retrying: false,
+        ...(snapshot.value === undefined ? {} : { previous: snapshot.value }),
+      }
+    }
+    return {
+      status: 'query_error',
+      error: snapshot.error,
+      ...(snapshot.value === undefined ? {} : { previous: snapshot.value }),
+    }
+  }
+  if (snapshot.status === 'disconnected') {
+    return {
+      status: 'transport_error',
+      error: snapshot.error ?? new ChronologRpcError('transport_unavailable', 'Query stream disconnected'),
+      retrying: true,
+      ...(snapshot.value === undefined ? {} : { previous: snapshot.value }),
+    }
+  }
+  return { status: 'loading', ...(snapshot.value === undefined ? {} : { previous: snapshot.value }) }
+}
+
+export interface UseResourceOptions {
+  readonly client?: ChronologClient
+  readonly enabled?: boolean
+}
+
+export function useChronologTransactionOutcome(
+  transactionId: string | undefined,
+  options: UseResourceOptions = {},
+): StreamSnapshot<TransactionOutcome> {
+  const client = useChronologClient(options.client)
+  const resource = useMemo(
+    () => transactionId === undefined || options.enabled === false
+      ? undefined
+      : client.transactionOutcome(transactionId),
+    [client, transactionId, options.enabled],
+  )
+  return useOptionalResource(resource)
+}
+
+export function useChronologSettlement(
+  transactionId: string | undefined,
+  options: UseResourceOptions = {},
+): StreamSnapshot<SettlementEvidence> {
+  const client = useChronologClient(options.client)
+  const resource = useMemo(
+    () => transactionId === undefined || options.enabled === false
+      ? undefined
+      : client.settlementEvidence(transactionId),
+    [client, transactionId, options.enabled],
+  )
+  return useOptionalResource(resource)
+}
+
+export function useChronologReplication(options: UseResourceOptions = {}): StreamSnapshot<ReplicationStatus> {
+  const client = useChronologClient(options.client)
+  const resource = useMemo(
+    () => options.enabled === false ? undefined : client.replicationStatus(),
+    [client, options.enabled],
+  )
+  return useOptionalResource(resource)
+}
+
+export function useChronologStatus(options: UseResourceOptions = {}): StreamSnapshot<NodeStatus> {
+  const client = useChronologClient(options.client)
+  const resource = useMemo(
+    () => options.enabled === false ? undefined : client.status(),
+    [client, options.enabled],
+  )
+  return useOptionalResource(resource)
+}
+
+export type TransactionMutationState =
+  | { readonly status: 'idle' }
+  | { readonly status: 'publishing' }
+  | { readonly status: 'published'; readonly handle: TransactionHandle }
+  | { readonly status: 'error'; readonly error: unknown }
+
+export interface TransactionMutation {
+  readonly state: TransactionMutationState
+  readonly run: (
+    build: (draft: TransactionDraft) => void | Promise<void>,
+    options?: TransactionOptions,
+  ) => Promise<TransactionHandle>
+  readonly reset: () => void
+}
+
+export function useChronologTransaction(clientOverride?: ChronologClient): TransactionMutation {
+  const client = useChronologClient(clientOverride)
+  const [state, setState] = useState<TransactionMutationState>({ status: 'idle' })
+  const run = useCallback(async (
+    build: (draft: TransactionDraft) => void | Promise<void>,
+    options: TransactionOptions = {},
+  ) => {
+    setState({ status: 'publishing' })
+    try {
+      const handle = await client.transaction(build, options)
+      setState({ status: 'published', handle })
+      return handle
+    } catch (error) {
+      setState({ status: 'error', error })
+      throw error
+    }
+  }, [client])
+  const reset = useCallback(() => setState({ status: 'idle' }), [])
+  return { state, run, reset }
+}
+
+function isTransportError(error: unknown): boolean {
+  return error instanceof ChronologRpcError && (
+    error.code === 'transport_unavailable' ||
+    error.code === 'deadline_exceeded' ||
+    error.code === 'cancelled'
+  )
+}

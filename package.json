@@ -1,0 +1,50 @@
+{
+  "name": "chronolog-db",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.12.4",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "dev": "tsx apps/chronologd/src/main.ts",
+    "cli": "tsx apps/chronolog/src/main.ts",
+    "demo": "tsx examples/end-to-end.ts"
+  },
+  "devDependencies": {
+    "@chronolog/compiler-sqlite": "workspace:*",
+    "@chronolog/client": "workspace:*",
+    "@chronolog/ir": "workspace:*",
+    "@chronolog/materializer-doltlite": "workspace:*",
+    "@chronolog/node-core": "workspace:*",
+    "@chronolog/protocol": "workspace:*",
+    "@chronolog/rpc": "workspace:*",
+    "@chronolog/transport-ssb": "workspace:*",
+    "@types/node": "^24.0.0",
+    "@vitest/coverage-v8": "^3.2.4",
+    "node-gyp": "11.5.0",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  },
+  "pnpm": {
+    "ignoredBuiltDependencies": [
+      "blake3"
+    ],
+    "onlyBuiltDependencies": [
+      "@dolthub/doltlite",
+      "esbuild",
+      "leveldown",
+      "sodium-native"
+    ],
+    "patchedDependencies": {
+      "@dolthub/doltlite@0.11.29": "patches/@dolthub__doltlite@0.11.29.patch"
+    }
+  }
+}

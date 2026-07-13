@@ -1,0 +1,19 @@
+{
+  "name": "@chronolog/react",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@chronolog/client": "workspace:*"
+  },
+  "peerDependencies": {
+    "react": ">=18"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.8",
+    "@types/react-test-renderer": "^19.1.0",
+    "react": "^19.1.0",
+    "react-test-renderer": "^19.1.0"
+  }
+}

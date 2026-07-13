@@ -1,0 +1,15 @@
+{
+  "name": "@chronolog/transport-ssb",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@chronolog/protocol": "workspace:*",
+    "secret-stack": "6.4.1",
+    "ssb-caps": "1.1.0",
+    "ssb-db2": "8.1.0",
+    "ssb-ebt": "9.1.2",
+    "ssb-keys": "8.4.0"
+  }
+}

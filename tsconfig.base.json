@@ -1,0 +1,36 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "useUnknownInCatchVariables": true,
+    "verbatimModuleSyntax": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "forceConsistentCasingInFileNames": true,
+    "baseUrl": ".",
+    "paths": {
+      "@chronolog/canonical": ["packages/canonical/src/index.ts"],
+      "@chronolog/ir": ["packages/ir/src/index.ts"],
+      "@chronolog/kernels": ["packages/kernels/src/index.ts"],
+      "@chronolog/protocol": ["packages/protocol/src/index.ts"],
+      "@chronolog/compiler-sqlite": ["packages/compiler-sqlite/src/index.ts"],
+      "@chronolog/capabilities": ["packages/capabilities/src/index.ts"],
+      "@chronolog/crypto": ["packages/crypto/src/index.ts"],
+      "@chronolog/control-store": ["packages/control-store/src/index.ts"],
+      "@chronolog/materializer-doltlite": ["packages/materializer-doltlite/src/index.ts"],
+      "@chronolog/transport-ssb": ["packages/transport-ssb/src/index.ts"],
+      "@chronolog/node-core": ["packages/node-core/src/index.ts"],
+      "@chronolog/rpc": ["packages/rpc/src/index.ts"],
+      "@chronolog/client": ["packages/client/src/index.ts"],
+      "@chronolog/react": ["packages/react/src/index.ts"],
+      "@chronolog/testkit": ["packages/testkit/src/index.ts"]
+    }
+  }
+}

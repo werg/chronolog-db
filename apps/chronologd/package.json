@@ -1,0 +1,16 @@
+{
+  "name": "chronologd",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@chronolog/compiler-sqlite": "workspace:*",
+    "@chronolog/control-store": "workspace:*",
+    "@chronolog/ir": "workspace:*",
+    "@chronolog/materializer-doltlite": "workspace:*",
+    "@chronolog/node-core": "workspace:*",
+    "@chronolog/protocol": "workspace:*",
+    "@chronolog/rpc": "workspace:*",
+    "@chronolog/transport-ssb": "workspace:*"
+  }
+}

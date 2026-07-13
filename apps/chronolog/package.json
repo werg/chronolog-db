@@ -1,0 +1,11 @@
+{
+  "name": "chronolog-cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@chronolog/client": "workspace:*",
+    "@chronolog/ir": "workspace:*",
+    "@chronolog/rpc": "workspace:*"
+  }
+}

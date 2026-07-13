@@ -1,0 +1,11 @@
+{
+  "name": "@chronolog/control-store",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@chronolog/protocol": "workspace:*",
+    "@chronolog/capabilities": "workspace:*"
+  }
+}

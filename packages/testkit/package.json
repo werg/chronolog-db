@@ -1,0 +1,1 @@
+{"name":"@chronolog/testkit","version":"0.0.0","private":true,"type":"module","exports":"./src/index.ts","dependencies":{"@chronolog/protocol":"workspace:*","@chronolog/node-core":"workspace:*","@chronolog/transport-ssb":"workspace:*"}}

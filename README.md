@@ -30,7 +30,8 @@ The protocol and architecture are described in [the design](docs/design.md),
 of the deterministic runtime is specified subsystem by subsystem in the
 [implementation specification suite](docs/implementation-specs/README.md).
 The exact working/gated feature boundary is tracked in
-[implementation status](docs/implementation-status.md).
+[implementation status](docs/implementation-status.md). Container fault and
+load testing is documented in the [chaos testing guide](docs/chaos-testing.md).
 
 This is a direct implementation with no legacy transaction decoder, schema
 migration path, state-merge fallback, or alternate SQLite backend. Development
@@ -89,6 +90,26 @@ Set `CHRONOLOG_URL`, `CHRONOLOG_GROUP_ID`, and `CHRONOLOG_TOKEN` when connecting
 to a non-default daemon. Transaction specifications can be read from a file by
 prefixing its path with `@`.
 
+## Container chaos testing
+
+The repository includes a seeded, artifact-producing P2P chaos runner using
+Testcontainers, directed Toxiproxy links, and Docker process/resource faults.
+It checks canonical state, the exact protected transaction log, replay
+quiescence, ingestion/materializer backlog, and validator-watermark exclusion
+evidence rather than relying on state-root agreement alone.
+
+```sh
+pnpm chaos doctor
+pnpm chaos:smoke
+pnpm chaos:crash
+pnpm chaos:stress
+```
+
+Each run retains histories, node logs and stores, convergence snapshots,
+resource metrics, environment/image metadata, and an exact replay command
+under `.chaos/`. See the [chaos testing guide](docs/chaos-testing.md) for custom
+scenarios and failure triage.
+
 ## Connecting SSB peers
 
 The daemon binds SSB to loopback on an ephemeral port by default. Configure a
@@ -127,6 +148,7 @@ single-participant bootstrap mechanism.
 | `client` / `react` | Reactive client, transaction drafts, framework bindings |
 | `kernels` | Exact int64, decimal, text, JSON, entropy, and vector algorithms |
 | `testkit` | Manual clocks, permutations, network test helpers |
+| `chaos` | Container topology, fault scheduling, stress workloads, checkers, artifacts |
 
 ## Current engineering boundary
 
@@ -149,6 +171,6 @@ next execution-profile integration.
 Before production use, the remaining work is operational hardening: a reviewed
 distribution of the small DoltLite authorizer shim, OS-backed keystores, capability
 and epoch administration commands in the daemon, blob manifests for large
-payloads, feed-gap/fork quarantine, reconnection scheduling and NAT discovery,
-resource sizing and load testing, cross-platform CI, and external security review. The
+payloads, feed-gap/fork quarantine, NAT discovery, deployment-specific resource
+sizing, cross-platform CI, and external security review. The
 implementation plan retains the full acceptance criteria for those items.

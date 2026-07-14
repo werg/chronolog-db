@@ -1,0 +1,17 @@
+{
+  "name": "@chronolog/chaos",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@chronolog/client": "workspace:*",
+    "@chronolog/ir": "workspace:*",
+    "@chronolog/protocol": "workspace:*",
+    "@chronolog/rpc": "workspace:*",
+    "@testcontainers/toxiproxy": "12.0.4",
+    "@types/dockerode": "4.0.1",
+    "dockerode": "5.0.1",
+    "ssb-keys": "8.4.0",
+    "testcontainers": "12.0.4"
+  }
+}

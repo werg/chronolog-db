@@ -1,0 +1,11 @@
+.git
+.chaos
+.chronolog
+coverage
+dist
+node_modules
+**/node_modules
+*.db
+*.db-shm
+*.db-wal
+*.doltlite

@@ -17,7 +17,8 @@ Implemented and covered by executable tests:
 - validator acceptance cutoffs, heartbeats, watermark evidence, and explicit
   history-reopening evidence;
 - HPKE epoch-key distribution and authenticated encrypted SSB envelopes;
-- memory and durable SSB-DB2 transport, allow-listed EBT replication, restart;
+- memory and durable SSB-DB2 transport, allow-listed EBT replication, exact
+  signed-author-tail recovery, checksummed append-log journaling, and restart;
 - canonical relational transaction programs with mandatory `assert`/`expect`
   preconditions and no consensus SQL strings;
 - schema and execution manifests committed by digest to every transaction;
@@ -30,8 +31,12 @@ Implemented and covered by executable tests:
   exact typed results, revision-pinned and live queries;
 - HTTP/NDJSON and in-process RPC, TypeScript client drafts, React stream hooks,
   IR CLI, daemon, and runnable late-predecessor demonstration;
-- exact int64/decimal/text/JSON/entropy/vector kernel implementations; and
-- pinned, statically linked sqlite-vec with dynamic extension loading disabled.
+- exact int64/decimal/text/JSON/entropy/vector kernel implementations;
+- pinned, statically linked sqlite-vec with dynamic extension loading disabled;
+  and
+- seeded container chaos/stress testing with directed Toxiproxy links, Docker
+  process/resource faults, finality-aware checkers, telemetry, offline feed
+  inspection, replayable artifacts, and CI profiles.
 
 The default execution manifest enables the compiler's portable core plus exact
 decimal and canonical JSON values. Ordinary vector values are available when a

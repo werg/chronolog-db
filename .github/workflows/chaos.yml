@@ -1,0 +1,49 @@
+name: Container chaos
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '17 3 * * 1'
+  workflow_dispatch:
+    inputs:
+      scenario:
+        description: Scenario to execute
+        required: true
+        default: smoke
+        type: choice
+        options: [smoke, stress]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: chaos-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  chaos:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CHAOS_SCENARIO: ${{ github.event_name == 'schedule' && 'stress' || inputs.scenario || 'smoke' }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm chaos doctor
+      - name: Run seeded container chaos
+        run: pnpm chaos run "$CHAOS_SCENARIO" --seed "ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+      - name: Preserve failure history and node stores
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: chronolog-chaos-${{ env.CHAOS_SCENARIO }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .chaos/
+          if-no-files-found: warn
+          retention-days: 14

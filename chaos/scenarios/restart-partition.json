@@ -1,0 +1,39 @@
+{
+  "format": "chronolog-chaos-scenario",
+  "name": "restart_partition",
+  "description": "Example four-node scenario with a minority partition and graceful validator restart.",
+  "nodes": 4,
+  "threshold": 3,
+  "durationMs": 15000,
+  "convergenceTimeoutMs": 60000,
+  "checkpointEvery": 5,
+  "cutoffLagMs": 10000,
+  "workload": {
+    "workers": 4,
+    "intervalMs": 100,
+    "accounts": 12,
+    "minimumDelta": -5,
+    "maximumDelta": 8
+  },
+  "faults": [
+    {
+      "atMs": 2000,
+      "durationMs": 3000,
+      "kind": "partition",
+      "groups": [["node-0", "node-1", "node-2"], ["node-3"]]
+    },
+    {
+      "atMs": 7000,
+      "kind": "restart",
+      "node": "node-1"
+    },
+    {
+      "atMs": 10000,
+      "durationMs": 2500,
+      "kind": "latency",
+      "links": ["node-0->node-2", "node-2->node-0"],
+      "latencyMs": 300,
+      "jitterMs": 100
+    }
+  ]
+}

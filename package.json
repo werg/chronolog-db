@@ -15,7 +15,11 @@
     "test:coverage": "vitest run --coverage",
     "dev": "tsx apps/chronologd/src/main.ts",
     "cli": "tsx apps/chronolog/src/main.ts",
-    "demo": "tsx examples/end-to-end.ts"
+    "demo": "tsx examples/end-to-end.ts",
+    "chaos": "tsx packages/chaos/src/cli.ts",
+    "chaos:smoke": "tsx packages/chaos/src/cli.ts run smoke",
+    "chaos:crash": "tsx packages/chaos/src/cli.ts run crash",
+    "chaos:stress": "tsx packages/chaos/src/cli.ts run stress"
   },
   "devDependencies": {
     "@chronolog/compiler-sqlite": "workspace:*",

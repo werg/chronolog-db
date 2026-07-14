@@ -2,10 +2,10 @@ node_modules/
 dist/
 coverage/
 .chronolog/
+.chaos/
 *.log
 *.db
 *.db-shm
 *.db-wal
 *.doltlite
 .DS_Store
-

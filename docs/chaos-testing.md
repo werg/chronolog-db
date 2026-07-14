@@ -72,6 +72,12 @@ Every node is both writer and validator in the built-in profiles. For `N`
 nodes, the harness creates `N × (N - 1)` Toxiproxy listeners: a fault on
 `node-0->node-2` never implicitly damages `node-2->node-0`.
 
+The generated static snapshot also binds each node's inner Ed25519 writer and
+validator identity to that node's exact authenticated SSB feed ID through
+`transportAuthor`. This makes feed provenance part of admission: replaying an
+otherwise valid signed candidate, attestation, or heartbeat through a different
+feed is rejected.
+
 Workers repeatedly:
 
 1. observe one account balance through the public RPC client;
@@ -169,9 +175,11 @@ them as sensitive even though built-in runs create throwaway groups.
 Start with `summary.json`, then correlate the last fault and operations in
 `history.ndjson`. `snapshots.last.json` distinguishes state/log/order mismatch
 from connectivity, pending-payload, ingestion-backlog, or materializer problems.
-The replication API exposes both `ingestionBacklog` and
-`materializationPending`; connected peer counts alone do not prove that a node
-is current. Use `metrics.ndjson` to find
+The replication API exposes `feedsWithGaps`, `ingestionBacklog`, and
+`materializationPending`; its state remains `syncing` while a feed prefix has a
+known gap, so connected peer counts alone do not prove that a node is current.
+The offline inspector reports the corresponding per-feed sequences and gaps. Use
+`metrics.ndjson` to find
 CPU starvation, memory growth, network stalls, or write spikes. Node stores are
 retained precisely so an SSB feed, control store, or DoltLite branch can be
 opened offline without trying to reproduce a transient failure first.

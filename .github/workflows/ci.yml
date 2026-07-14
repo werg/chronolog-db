@@ -1,0 +1,38 @@
+name: Quality and tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test:coverage
+      - run: pnpm build
+      - name: Preserve coverage summary
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: coverage-${{ github.run_id }}-${{ github.run_attempt }}
+          path: coverage/coverage-summary.json
+          if-no-files-found: warn
+          retention-days: 14

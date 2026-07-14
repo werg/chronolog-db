@@ -10,9 +10,11 @@ The core behavior is implemented end to end:
 
 - Strict deterministic CBOR, domain-separated SHA-256, and Ed25519 protocol
   messages.
-- Signed capability revisions with readers, writers, validators,
-  administrators, class/organization validation policies, and 2-of-3 recovery.
-- RFC 9180 HPKE epoch key wrapping and AES-256-GCM encrypted SSB envelopes.
+- Signed capability-revision and recovery primitives with readers, writers,
+  validators, administrators, class/organization validation policies, and
+  2-of-3 recovery.
+- RFC 9180 HPKE epoch-key wrapping primitives and AES-256-GCM encrypted SSB
+  envelopes.
 - Durable SSB-DB2 feeds plus authenticated, explicitly allow-listed EBT peer
   replication.
 - Mandatory typed-IR `assert` and exact-result `expect` preconditions.
@@ -87,7 +89,8 @@ default. `local-sql` is intentionally separate and every result is marked
 
 The CLI also supports `outcome`, `evidence`, `watermark`, and `replication`.
 Set `CHRONOLOG_URL`, `CHRONOLOG_GROUP_ID`, and `CHRONOLOG_TOKEN` when connecting
-to a non-default daemon. Transaction specifications can be read from a file by
+to a non-default daemon. The daemon refuses to bind RPC to a non-loopback host
+unless a non-empty `CHRONOLOG_TOKEN` is configured. Transaction specifications can be read from a file by
 prefixing its path with `@`.
 
 ## Container chaos testing
@@ -126,9 +129,57 @@ pnpm dev
 Only configured feed IDs are requested through EBT. SSB authenticates the
 connection and feed, while Chronolog independently verifies the inner protocol
 signature, capability revision, validation policy, group route, epoch, and
-ciphertext. A multi-member deployment supplies capability snapshots through
-`CapabilityMembershipResolver`; the daemon's generated configuration is the
-single-participant bootstrap mechanism.
+ciphertext.
+
+Without `CHRONOLOG_STATIC_MEMBERSHIP_FILE`, the daemon uses its generated
+single-participant writer/validator policy. A multi-member static deployment
+points every daemon at the same recovery-controlled JSON snapshot, whose group,
+membership revision, and validation policy must match the corresponding values
+in each node's `config.json`:
+
+```json
+{
+  "format": "chronolog-static-membership",
+  "groupId": "<canonical-base64-32-bytes>",
+  "membershipRevision": "<canonical-base64-32-bytes>",
+  "validationPolicy": "<canonical-base64-32-bytes>",
+  "writers": [
+    {
+      "publicKey": "<canonical-base64-Ed25519-public-key>",
+      "transportAuthor": "@writer-feed.ed25519"
+    }
+  ],
+  "validators": [
+    {
+      "publicKey": "<canonical-base64-Ed25519-public-key>",
+      "capability": "<canonical-base64-32-bytes>",
+      "transportAuthor": "@validator-feed.ed25519"
+    }
+  ],
+  "threshold": 1,
+  "watermarkThreshold": 1,
+  "policyVersion": "1"
+}
+```
+
+Start each participant with, for example,
+`CHRONOLOG_STATIC_MEMBERSHIP_FILE=/etc/chronolog/membership.json pnpm dev`.
+`watermarkThreshold` defaults to `threshold`; the decimal-string
+`policyVersion` defaults to `"1"` and is bound into validator attestations.
+Every operational writer and validator entry must include the exact
+`transportAuthor` SSB feed ID that may carry messages signed by that protocol
+key. This outer-feed binding prevents a valid signed envelope copied into a
+different feed from acquiring false authenticated provenance. Legacy shapes
+without the mapping may parse, but cannot authorize that participant's
+transport traffic.
+
+The static file is an out-of-band bootstrap snapshot, not replicated consensus
+state and not a live administration interface. The capability and crypto
+packages implement signed capability reduction, recovery, and epoch-key
+wrapping, and `node-core` accepts a `CapabilityMembershipResolver`, but the
+shipped daemon does not yet run a capability/epoch control plane or expose
+onboarding, rotation, or revocation commands. Operators must provision matching
+static snapshots and epoch configuration to all participants and restart them.
 
 ## Workspace
 
@@ -169,8 +220,9 @@ the standalone kernel package supplies the fuller algorithms targeted for the
 next execution-profile integration.
 
 Before production use, the remaining work is operational hardening: a reviewed
-distribution of the small DoltLite authorizer shim, OS-backed keystores, capability
-and epoch administration commands in the daemon, blob manifests for large
-payloads, feed-gap/fork quarantine, NAT discovery, deployment-specific resource
-sizing, cross-platform CI, and external security review. The
+distribution of the small DoltLite authorizer shim, OS-backed keystores,
+capability and epoch administration commands in the daemon, blob manifests for
+large payloads, feed-fork quarantine and repair, NAT discovery,
+deployment-specific resource sizing, cross-platform CI, and external security
+review. The
 implementation plan retains the full acceptance criteria for those items.

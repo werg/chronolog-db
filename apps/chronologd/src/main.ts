@@ -10,10 +10,11 @@ import { equalBytes } from '@chronolog/protocol'
 import { HttpRpcServer, NodeRpcService } from '@chronolog/rpc'
 import { SsbDb2Transport, type SsbPeer } from '@chronolog/transport-ssb'
 
-import { fromBase64, loadOrCreateConfig } from './config.js'
+import { fromBase64, loadOrCreateConfig, parseDaemonRuntimeConfig } from './config.js'
 import { loadStaticMembership } from './static-membership.js'
 
 const dataDirectory = resolve(process.env.CHRONOLOG_DATA_DIR ?? '.chronolog')
+const runtime = parseDaemonRuntimeConfig(process.env)
 const { config, identity } = await loadOrCreateConfig(dataDirectory)
 const groupId = fromBase64(config.groupId)
 const membershipRevision = fromBase64(config.membershipRevision)
@@ -47,70 +48,21 @@ const membership = process.env.CHRONOLOG_STATIC_MEMBERSHIP_FILE === undefined
       validationPolicy,
     })
 
-const configuredPeers = process.env.CHRONOLOG_SSB_PEERS === undefined
-  ? []
-  : JSON.parse(process.env.CHRONOLOG_SSB_PEERS) as SsbPeer[]
-const staleReconnectMs = process.env.CHRONOLOG_SSB_STALE_RECONNECT_MS === undefined
-  ? undefined
-  : Number(process.env.CHRONOLOG_SSB_STALE_RECONNECT_MS)
+const configuredPeers: readonly SsbPeer[] = runtime.peers
 const schemaManifest = await loadSchemaManifest(dataDirectory)
 const nativeEngine = readNativeEngineInfo()
 const executionManifest = createCoreExecutionManifest({
   profile: 'chronolog-core-portable',
   engineDigest: nativeEngine.digest,
 })
-const transport = await SsbDb2Transport.open({
-  path: join(dataDirectory, 'ssb'),
-  network: {
-    listen: {
-      host: process.env.CHRONOLOG_SSB_HOST ?? '127.0.0.1',
-      port: Number(process.env.CHRONOLOG_SSB_PORT ?? 0),
-      scope: process.env.CHRONOLOG_SSB_SCOPE === 'public' ? 'public' : process.env.CHRONOLOG_SSB_SCOPE === 'local' ? 'local' : 'device',
-    },
-    peers: configuredPeers,
-    ...(staleReconnectMs === undefined ? {} : { reconnect: { staleAfterMs: staleReconnectMs } }),
-  },
-})
-const materializer = await DeterministicMaterializer.open({
-  path: join(dataDirectory, 'application.db'),
-  checkpointEvery: Number(process.env.CHRONOLOG_CHECKPOINT_EVERY ?? 100),
-  schemaManifest,
-  executionManifest,
-})
-const node = new ChronologNode({
-  groupId,
-  groupRoute: fromBase64(config.groupRoute),
-  membershipRevision,
-  validationPolicy,
-  identity,
-  transport,
-  materializer,
-  controlStore: new ControlStore(new JsonFileControlStorePersistence(join(dataDirectory, 'control.json'))),
-  membership,
-  validator: {
-    capabilityId: validatorCapability,
-    cutoffLagMs: Number(process.env.CHRONOLOG_CUTOFF_LAG_MS ?? 60_000),
-    maxFutureSkewMs: Number(process.env.CHRONOLOG_MAX_FUTURE_SKEW_MS ?? 30_000),
-    heartbeatIntervalMs: Number(process.env.CHRONOLOG_HEARTBEAT_INTERVAL_MS ?? 30_000),
-  },
-  envelopeCipher: createEpochEnvelopeCipher(fromBase64(config.epochContentKey), BigInt(config.epoch)),
-})
-await node.start()
-
-const server = new HttpRpcServer({
-  service: new NodeRpcService({ node }),
-  host: process.env.CHRONOLOG_HOST ?? '127.0.0.1',
-  port: Number(process.env.CHRONOLOG_PORT ?? 8787),
-  ...(process.env.CHRONOLOG_TOKEN === undefined ? {} : { token: process.env.CHRONOLOG_TOKEN }),
-})
-const address = await server.listen()
+const { transport, materializer, node, server, address } = await startRuntime()
 process.stdout.write(`${JSON.stringify({
   event: 'chronologd.ready',
   url: address.url,
   groupId: Buffer.from(groupId).toString('base64url'),
   nodeId: Buffer.from(identity.publicKeyBytes).toString('base64url'),
   ssbId: transport.identity,
-  ssbAddress: transport.address(process.env.CHRONOLOG_SSB_SCOPE === 'public' ? 'public' : process.env.CHRONOLOG_SSB_SCOPE === 'local' ? 'local' : 'device'),
+  ssbAddress: transport.address(runtime.ssbScope),
   materializer: materializer.backend,
   schemaDigest: Buffer.from(materializer.schemaDigest).toString('base64url'),
   executionManifestDigest: Buffer.from(materializer.executionManifestDigest).toString('base64url'),
@@ -141,6 +93,68 @@ function terminate(signal: string): void {
 
 process.once('SIGINT', () => terminate('SIGINT'))
 process.once('SIGTERM', () => terminate('SIGTERM'))
+
+async function startRuntime() {
+  const transport = await SsbDb2Transport.open({
+    path: join(dataDirectory, 'ssb'),
+    network: {
+      listen: {
+        host: runtime.ssbHost,
+        port: runtime.ssbPort,
+        scope: runtime.ssbScope,
+      },
+      peers: configuredPeers,
+      ...(runtime.staleReconnectMs === undefined ? {} : { reconnect: { staleAfterMs: runtime.staleReconnectMs } }),
+    },
+  })
+  let materializer: DeterministicMaterializer | undefined
+  let node: ChronologNode | undefined
+  let server: HttpRpcServer | undefined
+  try {
+    materializer = await DeterministicMaterializer.open({
+      path: join(dataDirectory, 'application.db'),
+      checkpointEvery: runtime.checkpointEvery,
+      schemaManifest,
+      executionManifest,
+    })
+    node = new ChronologNode({
+      groupId,
+      groupRoute: fromBase64(config.groupRoute),
+      membershipRevision,
+      validationPolicy,
+      identity,
+      transport,
+      materializer,
+      controlStore: new ControlStore(new JsonFileControlStorePersistence(join(dataDirectory, 'control.json'))),
+      membership,
+      validator: {
+        capabilityId: validatorCapability,
+        cutoffLagMs: runtime.cutoffLagMs,
+        maxFutureSkewMs: runtime.maxFutureSkewMs,
+        heartbeatIntervalMs: runtime.heartbeatIntervalMs,
+      },
+      envelopeCipher: createEpochEnvelopeCipher(fromBase64(config.epochContentKey), BigInt(config.epoch)),
+    })
+    await node.start()
+    server = new HttpRpcServer({
+      service: new NodeRpcService({ node }),
+      host: runtime.host,
+      port: runtime.port,
+      ...(runtime.token === undefined ? {} : { token: runtime.token }),
+    })
+    const address = await server.listen()
+    return { transport, materializer, node, server, address }
+  } catch (error) {
+    await server?.close().catch(() => undefined)
+    if (node !== undefined) {
+      await node.close().catch(() => undefined)
+    } else {
+      materializer?.close()
+      await transport.close().catch(() => undefined)
+    }
+    throw error
+  }
+}
 
 async function loadSchemaManifest(directory: string): Promise<SchemaManifest> {
   const configured = process.env.CHRONOLOG_SCHEMA_FILE

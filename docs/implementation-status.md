@@ -12,13 +12,14 @@ Implemented and covered by executable tests:
 - canonical CBOR, typed hash domains, Ed25519 messages, strict IR/schema codecs;
 - immutable ordering by author timestamp, author key, feed sequence, and SSB ID;
 - transaction-level validator attestations whose arrival cannot change order;
-- revision-pinned reader/writer/validator/admin capabilities and offline
-  two-of-three root recovery;
+- revision-pinned reader/writer/validator/admin capability reduction and
+  offline two-of-three root recovery in the control-plane libraries;
 - validator acceptance cutoffs, heartbeats, watermark evidence, and explicit
   history-reopening evidence;
-- HPKE epoch-key distribution and authenticated encrypted SSB envelopes;
+- HPKE epoch-key wrapping primitives and authenticated encrypted SSB envelopes;
 - memory and durable SSB-DB2 transport, allow-listed EBT replication, exact
-  signed-author-tail recovery, checksummed append-log journaling, and restart;
+  signed-author-tail recovery, checksummed append-log journaling, per-feed
+  contiguous/gap status, and restart;
 - canonical relational transaction programs with mandatory `assert`/`expect`
   preconditions and no consensus SQL strings;
 - schema and execution manifests committed by digest to every transaction;
@@ -29,8 +30,9 @@ Implemented and covered by executable tests:
   transactions;
 - reserved transaction timestamp/nonce context, structural named parameters,
   exact typed results, revision-pinned and live queries;
-- HTTP/NDJSON and in-process RPC, TypeScript client drafts, React stream hooks,
-  IR CLI, daemon, and runnable late-predecessor demonstration;
+- HTTP/NDJSON and in-process RPC with abort-aware bounded shutdown, TypeScript
+  client drafts, React stream hooks, IR CLI, daemon, and runnable
+  late-predecessor demonstration;
 - exact int64/decimal/text/JSON/entropy/vector kernel implementations;
 - pinned, statically linked sqlite-vec with dynamic extension loading disabled;
   and
@@ -41,6 +43,25 @@ Implemented and covered by executable tests:
 The default execution manifest enables the compiler's portable core plus exact
 decimal and canonical JSON values. Ordinary vector values are available when a
 manifest sets a positive vector-dimension bound.
+
+## Daemon operational profiles
+
+The shipped daemon has two explicit bootstrap profiles. Its generated default
+is a single participant that is both writer and validator. Setting
+`CHRONOLOG_STATIC_MEMBERSHIP_FILE` loads an out-of-band multi-member snapshot
+pinned to the daemon configuration's group ID, membership revision, and
+validation policy. That snapshot sets validator and watermark thresholds and
+binds every protocol signer to the exact authenticated SSB feed allowed to
+carry its messages; `policyVersion` is an optional decimal string that defaults
+to `"1"`.
+
+This static snapshot is not a replicated capability log. The capability and
+crypto packages contain signed revision/recovery and epoch-wrapping machinery,
+and `node-core` can consume a capability-backed membership resolver, but the
+daemon does not currently administer those logs or expose live onboarding,
+revocation, recovery, or epoch-rotation commands. Multi-member operators must
+provision matching snapshots and epoch configuration out of band and restart
+participants. See the root README for the static membership JSON shape.
 
 ## Deliberately gated
 

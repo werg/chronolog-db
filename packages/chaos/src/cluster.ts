@@ -15,6 +15,7 @@ const RPC_PORT = 8787
 const SSB_PORT = 8008
 const TOXIPROXY_IMAGE = 'ghcr.io/shopify/toxiproxy:2.12.0'
 const GRACEFUL_RESTART_TIMEOUT_MS = 15_000
+const CHAOS_RPC_TOKEN = 'chronolog-chaos-local-token'
 
 export async function describeChaosEnvironment(image: string): Promise<Readonly<Record<string, unknown>>> {
   const docker = new Docker()
@@ -115,6 +116,7 @@ export class ChaosCluster {
             CHRONOLOG_DATA_DIR: '/data',
             CHRONOLOG_HOST: '0.0.0.0',
             CHRONOLOG_PORT: String(RPC_PORT),
+            CHRONOLOG_TOKEN: CHAOS_RPC_TOKEN,
             CHRONOLOG_SSB_HOST: '0.0.0.0',
             CHRONOLOG_SSB_PORT: String(SSB_PORT),
             CHRONOLOG_SSB_SCOPE: 'device',
@@ -136,6 +138,7 @@ export class ChaosCluster {
         const client = new ChronologClient({
           groupId: options.prepared.groupIdUrl,
           transport: new HttpRpcTransport({ baseUrl: url }),
+          token: CHAOS_RPC_TOKEN,
           unaryRetryAttempts: 1,
         })
         nodes.set(node.name, { name: node.name, container: started, client, url })
@@ -311,6 +314,7 @@ export class ChaosCluster {
     node.client = new ChronologClient({
       groupId: this.prepared.groupIdUrl,
       transport: new HttpRpcTransport({ baseUrl: node.url }),
+      token: CHAOS_RPC_TOKEN,
       unaryRetryAttempts: 1,
     })
     await previous.close()

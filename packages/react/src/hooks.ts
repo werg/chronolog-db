@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useState, useSyncExternalStore, type DependencyList } from 'react'
 import {
   ChronologRpcError,
   ClientSchemaMismatchError,
@@ -34,6 +34,31 @@ function useOptionalResource<T>(resource: StreamResource<T> | undefined): Stream
   )
 }
 
+function useOwnedResource<T>(factory: () => StreamResource<T> | undefined, dependencies: DependencyList): StreamResource<T> | undefined {
+  const [owned, setOwned] = useState<{
+    readonly dependencies: readonly unknown[]
+    readonly resource?: StreamResource<T>
+  }>()
+  const resource = owned !== undefined && sameDependencies(owned.dependencies, dependencies)
+    ? owned.resource
+    : undefined
+  useEffect(() => {
+    // Resource factories register with ChronologClient, so create them only in
+    // the committed effect. React may discard render-time memo calculations in
+    // Strict Mode, which would otherwise leave an unreachable tracked resource.
+    const next = factory()
+    setOwned({ dependencies: [...dependencies], ...(next === undefined ? {} : { resource: next }) })
+    return () => next?.dispose()
+    // The caller supplies the canonical semantic identity of the factory.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, dependencies)
+  return resource
+}
+
+function sameDependencies(previous: readonly unknown[], current: DependencyList): boolean {
+  return previous.length === current.length && previous.every((value, index) => Object.is(value, current[index]))
+}
+
 export type ChronologQueryState<Row> =
   | { readonly status: 'loading'; readonly previous?: LiveQueryValue<Row> }
   | { readonly status: 'value'; readonly value: LiveQueryValue<Row> }
@@ -59,14 +84,13 @@ export function useChronologQuery<
 ): ChronologQueryState<Row> {
   const client = useChronologClient(options.client)
   const identity = client.queryResourceKey(query, parameters)
-  const resource = useMemo(
+  const resource = useOwnedResource(
     () => options.enabled === false
       ? undefined
       : client.liveQuery(query, parameters, {
           ...(options.maxDisplayRows === undefined ? {} : { maxDisplayRows: options.maxDisplayRows }),
         }),
     // Canonical query/parameter identity deliberately replaces JavaScript object identity.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [client, identity, options.maxDisplayRows, options.enabled],
   )
   const snapshot = useOptionalResource(resource)
@@ -119,7 +143,7 @@ export function useChronologTransactionOutcome(
   options: UseResourceOptions = {},
 ): StreamSnapshot<TransactionOutcome> {
   const client = useChronologClient(options.client)
-  const resource = useMemo(
+  const resource = useOwnedResource(
     () => transactionId === undefined || options.enabled === false
       ? undefined
       : client.transactionOutcome(transactionId),
@@ -133,7 +157,7 @@ export function useChronologSettlement(
   options: UseResourceOptions = {},
 ): StreamSnapshot<SettlementEvidence> {
   const client = useChronologClient(options.client)
-  const resource = useMemo(
+  const resource = useOwnedResource(
     () => transactionId === undefined || options.enabled === false
       ? undefined
       : client.settlementEvidence(transactionId),
@@ -144,7 +168,7 @@ export function useChronologSettlement(
 
 export function useChronologReplication(options: UseResourceOptions = {}): StreamSnapshot<ReplicationStatus> {
   const client = useChronologClient(options.client)
-  const resource = useMemo(
+  const resource = useOwnedResource(
     () => options.enabled === false ? undefined : client.replicationStatus(),
     [client, options.enabled],
   )
@@ -153,7 +177,7 @@ export function useChronologReplication(options: UseResourceOptions = {}): Strea
 
 export function useChronologStatus(options: UseResourceOptions = {}): StreamSnapshot<NodeStatus> {
   const client = useChronologClient(options.client)
-  const resource = useMemo(
+  const resource = useOwnedResource(
     () => options.enabled === false ? undefined : client.status(),
     [client, options.enabled],
   )

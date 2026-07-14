@@ -1,8 +1,8 @@
 import { StrictMode, createElement } from 'react'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { describe, expect, it } from 'vitest'
-import { StreamResource, type StreamSnapshot } from '@chronolog/client'
-import { useStreamResource } from './hooks.js'
+import { StreamResource, type ChronologClient, type NodeStatus, type StreamSnapshot } from '@chronolog/client'
+import { useChronologStatus, useStreamResource } from './hooks.js'
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -55,5 +55,39 @@ describe('useStreamResource', () => {
     })
     await waitFor(() => closes === 1)
     expect(closes).toBe(1)
+  })
+
+  it('disposes hook-owned resources when replaced or unmounted', async () => {
+    const resources: StreamResource<NodeStatus>[] = []
+    const snapshots: StreamSnapshot<NodeStatus>[] = []
+    const client = {
+      status() {
+        const resource = new StreamResource<NodeStatus>({
+          open: async function* () {},
+          cursor: () => undefined,
+          initial: {
+            apiVersion: 'chronolog.rpc', state: 'ready', nodeId: `node-${resources.length}`,
+            writable: true, validating: false,
+          },
+        })
+        resources.push(resource)
+        return resource
+      },
+    } as unknown as ChronologClient
+    function Probe({ enabled }: { readonly enabled: boolean }) {
+      snapshots.push(useChronologStatus({ client, enabled }))
+      return null
+    }
+
+    let renderer: ReactTestRenderer | undefined
+    await act(async () => { renderer = create(createElement(StrictMode, null, createElement(Probe, { enabled: true }))) })
+    expect(resources.filter((resource) => resource.getSnapshot().status !== 'closed')).toHaveLength(1)
+    await act(async () => { renderer?.update(createElement(StrictMode, null, createElement(Probe, { enabled: false }))) })
+    expect(resources.every((resource) => resource.getSnapshot().status === 'closed')).toBe(true)
+    expect(snapshots.at(-1)?.value).toBeUndefined()
+    await act(async () => { renderer?.update(createElement(StrictMode, null, createElement(Probe, { enabled: true }))) })
+    expect(resources.filter((resource) => resource.getSnapshot().status !== 'closed')).toHaveLength(1)
+    await act(async () => { renderer?.unmount() })
+    expect(resources.every((resource) => resource.getSnapshot().status === 'closed')).toBe(true)
   })
 })

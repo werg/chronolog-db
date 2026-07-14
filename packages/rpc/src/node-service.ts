@@ -146,12 +146,20 @@ interface Draft {
   readonly expectationObservations: Map<number, string>
   nextPreconditionId: number
   draftRevision: bigint
-  cancelled: boolean
+  state: 'open' | 'busy' | 'publishing' | 'cancelled'
+  tail: Promise<void>
 }
 
 interface IdempotentEntry {
   readonly fingerprint: string
   readonly promise: Promise<unknown>
+  settled: boolean
+  expiresAtMonotonic: number
+}
+
+interface PublishedLabelsEntry {
+  readonly labels: ReadonlyMap<string, string>
+  readonly expiresAtMonotonic: number
 }
 
 export interface NodeRpcServiceOptions {
@@ -159,8 +167,17 @@ export interface NodeRpcServiceOptions {
   readonly irBackend?: NodeRpcIrBackend
   readonly draftTtlMs?: number
   readonly maxDraftTtlMs?: number
+  readonly maxDrafts?: number
+  readonly maxObservationsPerDraft?: number
+  readonly maxPreconditionsPerDraft?: number
+  readonly maxMutationsPerDraft?: number
   readonly maxDisplayRows?: number
   readonly maxLocalSqlRows?: number
+  /** Retention for completed request/publication idempotency and label metadata. */
+  readonly retentionTtlMs?: number
+  readonly maxIdempotencyEntries?: number
+  readonly maxPublicationEntries?: number
+  readonly maxPublishedLabelEntries?: number
   readonly now?: () => number
   readonly monotonicNow?: () => number
   readonly id?: () => string
@@ -171,23 +188,39 @@ export class NodeRpcService implements ChronologRpcService {
   readonly #ir: NodeRpcIrBackend
   readonly #draftTtlMs: number
   readonly #maxDraftTtlMs: number
+  readonly #maxDrafts: number
+  readonly #maxObservationsPerDraft: number
+  readonly #maxPreconditionsPerDraft: number
+  readonly #maxMutationsPerDraft: number
   readonly #maxDisplayRows: number
   readonly #maxLocalSqlRows: number
+  readonly #retentionTtlMs: number
+  readonly #maxIdempotencyEntries: number
+  readonly #maxPublicationEntries: number
+  readonly #maxPublishedLabelEntries: number
   readonly #now: () => number
   readonly #monotonicNow: () => number
   readonly #id: () => string
   readonly #drafts = new Map<string, Draft>()
   readonly #idempotent = new Map<string, IdempotentEntry>()
   readonly #publications = new Map<string, IdempotentEntry>()
-  readonly #publishedLabels = new Map<string, ReadonlyMap<string, string>>()
+  readonly #publishedLabels = new Map<string, PublishedLabelsEntry>()
 
   constructor(options: NodeRpcServiceOptions) {
     this.#node = options.node
     this.#ir = options.irBackend ?? nodeIrBackend(options.node)
-    this.#draftTtlMs = options.draftTtlMs ?? 5 * 60_000
-    this.#maxDraftTtlMs = options.maxDraftTtlMs ?? 60 * 60_000
-    this.#maxDisplayRows = options.maxDisplayRows ?? 1_000
-    this.#maxLocalSqlRows = options.maxLocalSqlRows ?? 10_000
+    this.#draftTtlMs = positiveSafeInteger(options.draftTtlMs ?? 5 * 60_000, 'draftTtlMs')
+    this.#maxDraftTtlMs = positiveSafeInteger(options.maxDraftTtlMs ?? 60 * 60_000, 'maxDraftTtlMs')
+    this.#maxDrafts = positiveSafeInteger(options.maxDrafts ?? 1_024, 'maxDrafts')
+    this.#maxObservationsPerDraft = positiveSafeInteger(options.maxObservationsPerDraft ?? 1_024, 'maxObservationsPerDraft')
+    this.#maxPreconditionsPerDraft = positiveSafeInteger(options.maxPreconditionsPerDraft ?? 1_024, 'maxPreconditionsPerDraft')
+    this.#maxMutationsPerDraft = positiveSafeInteger(options.maxMutationsPerDraft ?? 1_024, 'maxMutationsPerDraft')
+    this.#maxDisplayRows = nonnegativeSafeInteger(options.maxDisplayRows ?? 1_000, 'maxDisplayRows')
+    this.#maxLocalSqlRows = nonnegativeSafeInteger(options.maxLocalSqlRows ?? 10_000, 'maxLocalSqlRows')
+    this.#retentionTtlMs = positiveSafeInteger(options.retentionTtlMs ?? 24 * 60 * 60_000, 'retentionTtlMs')
+    this.#maxIdempotencyEntries = positiveSafeInteger(options.maxIdempotencyEntries ?? 10_000, 'maxIdempotencyEntries')
+    this.#maxPublicationEntries = positiveSafeInteger(options.maxPublicationEntries ?? 10_000, 'maxPublicationEntries')
+    this.#maxPublishedLabelEntries = positiveSafeInteger(options.maxPublishedLabelEntries ?? 10_000, 'maxPublishedLabelEntries')
     this.#now = options.now ?? Date.now
     this.#monotonicNow = options.monotonicNow ?? (() => performance.now())
     this.#id = options.id ?? randomUUID
@@ -305,6 +338,8 @@ export class NodeRpcService implements ChronologRpcService {
     this.#assertGroup(request.groupId)
     const owner = principal(context)
     return this.#once('begin', request, owner, async () => {
+      this.#pruneDrafts()
+      if (this.#drafts.size >= this.#maxDrafts) throw exhausted('Too many active transaction drafts')
       const backend = this.#backend()
       const pinnedRevision = request.atRevision === undefined ? backend.revision : BigInt(request.atRevision)
       if (pinnedRevision !== backend.revision) throw revisionUnavailable('Requested draft revision is not retained locally')
@@ -336,7 +371,8 @@ export class NodeRpcService implements ChronologRpcService {
         // so ordinary monotonic code-generated query/mutation IDs cannot collide.
         nextPreconditionId: Number.MAX_SAFE_INTEGER,
         draftRevision: 0n,
-        cancelled: false,
+        state: 'open',
+        tail: Promise.resolve(),
       }
       this.#drafts.set(draft.id, draft)
       const revision = await this.#revision(pinnedRevision, backend.orderLength)
@@ -355,8 +391,10 @@ export class NodeRpcService implements ChronologRpcService {
   async observeIr(request: ObserveIrRequest, context: RpcCallContext): Promise<ObserveIrResponse> {
     this.#assertGroup(request.groupId)
     const owner = principal(context)
-    return this.#once('observeIr', request, owner, async () => {
-      const draft = this.#draft(request.draftId, owner)
+    return this.#once('observeIr', request, owner, () => this.#withDraft(request.draftId, owner, 'busy', async (draft) => {
+      if (draft.observations.size >= this.#maxObservationsPerDraft) {
+        throw exhausted('Transaction draft observation limit reached')
+      }
       const backend = this.#backend()
       this.#assertDraftConfiguration(draft, backend)
       const query = decodeAndBindQuery(request.queryIr, request.parameters, request.parameterNames)
@@ -387,11 +425,12 @@ export class NodeRpcService implements ChronologRpcService {
       draft.observations.set(id, observation)
       draft.draftRevision += 1n
       return this.#observationResponse(draft, observation, execution)
-    })
+    }))
   }
 
   async addAssertionIr(request: AddAssertionIrRequest, context: RpcCallContext): Promise<DraftMutationResponse> {
     return this.#mutateDraft('assertionIr', request, context, (draft, backend) => {
+      this.#assertPreconditionCapacity(draft)
       const query = decodeAndBindQuery(request.queryIr, request.parameters, request.parameterNames)
       const diagnostics = mapDiagnostics(backend.validateQuery(query), request.applicationLabel)
       const id = draft.nextPreconditionId--
@@ -403,6 +442,7 @@ export class NodeRpcService implements ChronologRpcService {
 
   async addExpectation(request: AddExpectationRequest, context: RpcCallContext): Promise<DraftMutationResponse> {
     return this.#mutateDraft('expectation', request, context, (draft, backend) => {
+      this.#assertPreconditionCapacity(draft)
       let query: Query
       let result: IrQueryResult
       let observationId: string | undefined
@@ -428,6 +468,9 @@ export class NodeRpcService implements ChronologRpcService {
 
   async addMutationIr(request: AddMutationIrRequest, context: RpcCallContext): Promise<DraftMutationResponse> {
     return this.#mutateDraft('mutationIr', request, context, (draft, backend) => {
+      if (draft.mutations.length >= this.#maxMutationsPerDraft) {
+        throw exhausted('Transaction draft mutation limit reached')
+      }
       const mutation = decodeCanonical('mutation IR', () => decodeMutation(fromBase64Url(request.mutationIr)))
       if (containsParameterExpression(mutation)) throw invalid('Published mutation IR cannot retain parameter expressions')
       if (request.applicationLabel !== undefined) draft.labels.set(`m:${mutation.id}`, request.applicationLabel)
@@ -440,16 +483,16 @@ export class NodeRpcService implements ChronologRpcService {
 
   async validateDraft(request: ValidateDraftRequest, context: RpcCallContext): Promise<ValidateDraftResponse> {
     this.#assertGroup(request.groupId)
-    const draft = this.#draft(request.draftId, principal(context))
-    this.#validateCompleteDraft(draft)
-    return this.#mutationResponse(draft)
+    return this.#withDraft(request.draftId, principal(context), 'busy', async (draft) => {
+      this.#validateCompleteDraft(draft)
+      return this.#mutationResponse(draft)
+    })
   }
 
   async rebaseDraft(request: RebaseDraftRequest, context: RpcCallContext): Promise<RebaseDraftResponse> {
     this.#assertGroup(request.groupId)
     const owner = principal(context)
-    return this.#once('rebase', request, owner, async () => {
-      const draft = this.#draft(request.draftId, owner)
+    return this.#once('rebase', request, owner, () => this.#withDraft(request.draftId, owner, 'busy', async (draft) => {
       const backend = this.#backend()
       const target = request.toRevision === undefined ? backend.revision : BigInt(request.toRevision)
       if (target !== backend.revision) throw revisionUnavailable('Requested rebase revision is not retained locally')
@@ -532,7 +575,7 @@ export class NodeRpcService implements ChronologRpcService {
         refreshedObservations: refreshed,
         invalidatedObservationIds: invalidated,
       }
-    })
+    }))
   }
 
   async cancelDraft(request: CancelDraftRequest, context: RpcCallContext): Promise<CancelDraftResponse> {
@@ -541,9 +584,17 @@ export class NodeRpcService implements ChronologRpcService {
     return this.#once('cancel', request, owner, async () => {
       const draft = this.#drafts.get(request.draftId)
       if (!draft || draft.owner !== owner) return { draftId: request.draftId, cancelled: false }
-      draft.cancelled = true
-      this.#drafts.delete(request.draftId)
-      return { draftId: request.draftId, cancelled: true }
+      try {
+        return await this.#withDraft(request.draftId, owner, 'cancelled', async (locked) => {
+          this.#drafts.delete(request.draftId)
+          return { draftId: locked.id, cancelled: true }
+        })
+      } catch (error) {
+        if (error instanceof ChronologRpcError && error.code === 'not_found') {
+          return { draftId: request.draftId, cancelled: false }
+        }
+        throw error
+      }
     })
   }
 
@@ -552,13 +603,15 @@ export class NodeRpcService implements ChronologRpcService {
     const owner = principal(context)
     const fingerprint = stableFingerprint({ ...request, requestId: undefined })
     const key = `${owner}\0${request.groupId}\0${request.idempotencyKey}`
+    this.#maintenance()
     const existing = this.#publications.get(key)
     if (existing) {
       if (existing.fingerprint !== fingerprint) throw new ChronologRpcError('already_exists', 'Idempotency key was used for another draft')
+      this.#touch(this.#publications, key, existing)
       return existing.promise as Promise<PublishDraftResponse>
     }
-    const operation = this.#once('publish', request, owner, async () => {
-      const draft = this.#draft(request.draftId, owner)
+    this.#ensureEntryCapacity(this.#publications, this.#maxPublicationEntries, 'publication')
+    const operation = this.#once('publish', request, owner, () => this.#withDraft(request.draftId, owner, 'publishing', async (draft) => {
       this.#validateCompleteDraft(draft)
       this.#assertDraftConfiguration(draft, this.#backend())
       const program: TransactionProgram = {
@@ -585,14 +638,24 @@ export class NodeRpcService implements ChronologRpcService {
         durableLocalAppend: true,
         publishedAt: new Date(this.#now()).toISOString(),
       }
-      this.#publishedLabels.set(published.txIdText, new Map(draft.labels))
+      this.#publishedLabels.set(published.txIdText, {
+        labels: new Map(draft.labels),
+        expiresAtMonotonic: this.#monotonicNow() + this.#retentionTtlMs,
+      })
+      this.#prunePublishedLabels()
       this.#drafts.delete(draft.id)
       return response
-    })
-    this.#publications.set(key, { fingerprint, promise: operation })
-    void operation.catch((error: unknown) => {
-      if (error instanceof ChronologRpcError && error.retryable) this.#publications.delete(key)
-    })
+    }))
+    const entry = this.#newEntry(fingerprint, operation)
+    this.#publications.set(key, entry)
+    this.#pruneEntries(this.#publications, this.#maxPublicationEntries)
+    void operation.then(
+      () => this.#settleEntry(this.#publications, key, entry),
+      (error: unknown) => {
+        if (error instanceof ChronologRpcError && error.retryable) this.#publications.delete(key)
+        else this.#settleEntry(this.#publications, key, entry)
+      },
+    )
     return operation
   }
 
@@ -640,6 +703,16 @@ export class NodeRpcService implements ChronologRpcService {
     const core = this.#node.candidateCore(txId)
     if (!candidate || !core) throw new ChronologRpcError('not_found', 'Unknown transaction')
     const evidence = await this.#node.settlementEvidence(txId)
+    const reopenings = new Map(this.#node.controlStore.snapshot().historyReopenings.map((event) => [event.id, event]))
+    const historyReopeningEvents = (evidence?.historyReopeningIds ?? []).flatMap((id) => {
+      const event = reopenings.get(id)
+      return event === undefined ? [] : [{
+        eventId: event.id,
+        type: 'recovery' as const,
+        effectiveFromTimestamp: event.floorMs.toString(10),
+        membershipRevision: toBase64Url(event.membershipRevision),
+      }]
+    })
     return {
       transactionId: request.transactionId,
       outcome,
@@ -649,10 +722,12 @@ export class NodeRpcService implements ChronologRpcService {
       validationPolicyId: toBase64Url(core.validationPolicy),
       membershipRevision: toBase64Url(core.membershipRevision),
       ...(evidence?.watermark.cutoffMs === null || evidence === null ? {} : { policyWatermarkTimestamp: evidence.watermark.cutoffMs.toString(10) }),
-      blockingHeartbeats: [],
+      blockingHeartbeats: (evidence?.watermark.heartbeatIds ?? []).map(toBase64Url),
       unresolvedReferences: (evidence?.unresolvedAttestationIds ?? []).map((id) => ({ kind: 'attestation' as const, reference: toBase64Url(id) })),
-      historyReopeningEvents: (evidence?.historyReopeningIds ?? []).map((id) => ({ eventId: id, type: 'recovery' as const, effectiveFromTimestamp: '0', membershipRevision: toBase64Url(core.membershipRevision) })),
-      confidence: evidence?.belowWatermark === true ? 'policy_watermark_reached' : evidence === null ? 'insufficient' : 'provisional',
+      historyReopeningEvents,
+      confidence: historyReopeningEvents.length > 0
+        ? 'history_reopened'
+        : evidence?.belowWatermark === true ? 'policy_watermark_reached' : evidence === null ? 'insufficient' : 'provisional',
       calculatedAt: new Date(this.#now()).toISOString(),
     }
   }
@@ -682,19 +757,20 @@ export class NodeRpcService implements ChronologRpcService {
     const status = await this.#node.status()
     const knownPeers = status.transport.configuredPeers?.length ?? status.transport.peers.length
     const ingestionBacklog = Math.max(0, status.transport.records - status.processedTransportRecords)
-    const routineHeartbeatTail = Math.max(4, knownPeers * 2)
+    const feedsWithGaps = status.transport.feedsWithGaps ??
+      status.transport.feedStates?.filter((feed) => feed.hasGaps).length ?? 0
     const pendingPayloads = this.#node.controlStore.listCandidates().filter((candidate) => candidate.state === 'waiting_for_payload').length
     return {
       groupId: this.#groupId(),
       revision: this.#node.revision.toString(10),
       connectedPeers: status.transport.peers.length,
       knownPeers,
-      feedsWithGaps: 0,
+      feedsWithGaps,
       pendingPayloads,
       ingestionBacklog,
       materializationPending: status.materializationPending,
-      state: status.lastError === undefined
-        ? ingestionBacklog > routineHeartbeatTail || pendingPayloads > 0 || status.materializationPending
+      state: status.lastError === undefined && status.transport.lastCatchUpError === undefined
+        ? ingestionBacklog > 0 || feedsWithGaps > 0 || pendingPayloads > 0 || status.materializationPending
           ? 'syncing'
           : knownPeers === 0 || status.transport.peers.length > 0 ? 'current' : 'offline'
         : 'degraded',
@@ -715,15 +791,14 @@ export class NodeRpcService implements ChronologRpcService {
   ): Promise<DraftMutationResponse> {
     this.#assertGroup(request.groupId)
     const owner = principal(context)
-    return this.#once(kind, request, owner, async () => {
-      const draft = this.#draft(request.draftId, owner)
+    return this.#once(kind, request, owner, () => this.#withDraft(request.draftId, owner, 'busy', async (draft) => {
       const backend = this.#backend()
       this.#assertDraftConfiguration(draft, backend)
       const diagnostics = mutation(draft, backend)
       this.#replaceDiagnostics(draft, diagnostics)
       draft.draftRevision += 1n
       return this.#mutationResponse(draft)
-    })
+    }))
   }
 
   #validateCompleteDraft(draft: Draft): void {
@@ -736,6 +811,12 @@ export class NodeRpcService implements ChronologRpcService {
     ]
     this.#replaceDiagnostics(draft, diagnostics)
     if (diagnostics.some((item) => item.severity === 'error')) throw protocolRejected(diagnostics)
+  }
+
+  #assertPreconditionCapacity(draft: Draft): void {
+    if (draft.preconditions.length >= this.#maxPreconditionsPerDraft) {
+      throw exhausted('Transaction draft precondition limit reached')
+    }
   }
 
   #replaceDiagnostics(draft: Draft, diagnostics: readonly IrDiagnostic[]): void {
@@ -767,12 +848,36 @@ export class NodeRpcService implements ChronologRpcService {
 
   #draft(id: string, owner: string): Draft {
     const draft = this.#drafts.get(id)
-    if (!draft || draft.cancelled || draft.owner !== owner) throw new ChronologRpcError('not_found', 'Unknown draft')
+    this.#pruneDrafts(id)
+    if (!draft || draft.state === 'cancelled' || draft.owner !== owner) throw new ChronologRpcError('not_found', 'Unknown draft')
     if (draft.expiresAtMonotonic <= this.#monotonicNow()) {
-      this.#drafts.delete(id)
+      if (draft.state === 'open') this.#drafts.delete(id)
       throw new ChronologRpcError('draft_expired', 'Draft expired')
     }
     return draft
+  }
+
+  async #withDraft<T>(
+    id: string,
+    owner: string,
+    state: 'busy' | 'publishing' | 'cancelled',
+    operation: (draft: Draft) => Promise<T>,
+  ): Promise<T> {
+    const known = this.#draft(id, owner)
+    const previous = known.tail
+    let release: (() => void) | undefined
+    const turn = new Promise<void>((resolve) => { release = resolve })
+    known.tail = previous.then(() => turn)
+    await previous
+    try {
+      const draft = this.#draft(id, owner)
+      if (draft !== known || draft.state !== 'open') throw failed('Draft is not open for mutation')
+      draft.state = state
+      return await operation(draft)
+    } finally {
+      if (this.#drafts.get(id) === known && known.state !== 'cancelled') known.state = 'open'
+      release?.()
+    }
   }
 
   #draftContext(draft: Draft): DraftExecutionContext {
@@ -845,7 +950,11 @@ export class NodeRpcService implements ChronologRpcService {
   }
 
   #rejectionAttribution(transactionId: string, outcome: DerivedOutcome): RejectionAttribution {
-    const labels = this.#publishedLabels.get(transactionId)
+    this.#maintenance()
+    const labelEntry = this.#publishedLabels.get(transactionId)
+    if (labelEntry !== undefined) this.#touch(this.#publishedLabels, transactionId, labelEntry)
+    const persistedLabels = this.#node.candidateCore(utf8(transactionId))?.program.metadata?.get('chronolog.application-labels.v1')
+    const labels = labelEntry?.labels ?? decodeApplicationLabels(persistedLabels)
     const code = outcome.rejectionCode ?? outcome.outcome
     const preconditionId = outcome.failingPreconditionId ?? outcome.preconditionId
     const commandId = outcome.failingCommandId ?? outcome.commandId
@@ -864,19 +973,99 @@ export class NodeRpcService implements ChronologRpcService {
   }
 
   #once<T>(kind: string, request: object & { readonly groupId?: string; readonly requestId: string }, owner: string, operation: () => Promise<T>): Promise<T> {
+    this.#maintenance()
     const key = `${owner}\0${request.groupId ?? ''}\0${kind}\0${request.requestId}`
     const fingerprint = stableFingerprint(request)
     const previous = this.#idempotent.get(key)
     if (previous) {
       if (previous.fingerprint !== fingerprint) throw new ChronologRpcError('already_exists', 'Request ID was reused with different content')
+      this.#touch(this.#idempotent, key, previous)
       return previous.promise as Promise<T>
     }
+    this.#ensureEntryCapacity(this.#idempotent, this.#maxIdempotencyEntries, 'request')
     const promise = operation()
-    this.#idempotent.set(key, { fingerprint, promise })
-    void promise.catch((error: unknown) => {
-      if (error instanceof ChronologRpcError && error.retryable) this.#idempotent.delete(key)
-    })
+    const entry = this.#newEntry(fingerprint, promise)
+    this.#idempotent.set(key, entry)
+    this.#pruneEntries(this.#idempotent, this.#maxIdempotencyEntries)
+    void promise.then(
+      () => this.#settleEntry(this.#idempotent, key, entry),
+      (error: unknown) => {
+        if (error instanceof ChronologRpcError && error.retryable) this.#idempotent.delete(key)
+        else this.#settleEntry(this.#idempotent, key, entry)
+      },
+    )
     return promise
+  }
+
+  #newEntry(fingerprint: string, promise: Promise<unknown>): IdempotentEntry {
+    return {
+      fingerprint,
+      promise,
+      settled: false,
+      expiresAtMonotonic: this.#monotonicNow() + this.#retentionTtlMs,
+    }
+  }
+
+  #settleEntry(map: Map<string, IdempotentEntry>, key: string, entry: IdempotentEntry): void {
+    entry.settled = true
+    entry.expiresAtMonotonic = this.#monotonicNow() + this.#retentionTtlMs
+    if (map.get(key) === entry) this.#touch(map, key, entry)
+    this.#pruneEntries(
+      map,
+      map === this.#idempotent ? this.#maxIdempotencyEntries : this.#maxPublicationEntries,
+    )
+  }
+
+  #maintenance(): void {
+    const now = this.#monotonicNow()
+    this.#pruneEntries(this.#idempotent, this.#maxIdempotencyEntries, now)
+    this.#pruneEntries(this.#publications, this.#maxPublicationEntries, now)
+    this.#prunePublishedLabels(now)
+  }
+
+  #pruneDrafts(exceptId?: string): void {
+    const now = this.#monotonicNow()
+    for (const [id, draft] of this.#drafts) {
+      if (id !== exceptId && draft.state === 'open' && draft.expiresAtMonotonic <= now) this.#drafts.delete(id)
+    }
+  }
+
+  #pruneEntries(map: Map<string, IdempotentEntry>, maximum: number, now = this.#monotonicNow()): void {
+    for (const [key, entry] of map) {
+      if (entry.settled && entry.expiresAtMonotonic <= now) map.delete(key)
+    }
+    while (map.size > maximum) {
+      const oldestSettled = [...map].find(([, entry]) => entry.settled)
+      if (oldestSettled === undefined) break
+      map.delete(oldestSettled[0])
+    }
+  }
+
+  #ensureEntryCapacity(map: Map<string, IdempotentEntry>, maximum: number, kind: string): void {
+    this.#pruneEntries(map, maximum)
+    while (map.size >= maximum) {
+      const oldestSettled = [...map].find(([, entry]) => entry.settled)
+      if (oldestSettled === undefined) {
+        throw new ChronologRpcError('resource_exhausted', `Too many in-flight unique ${kind}s`, { retryable: true })
+      }
+      map.delete(oldestSettled[0])
+    }
+  }
+
+  #prunePublishedLabels(now = this.#monotonicNow()): void {
+    for (const [transactionId, entry] of this.#publishedLabels) {
+      if (entry.expiresAtMonotonic <= now) this.#publishedLabels.delete(transactionId)
+    }
+    while (this.#publishedLabels.size > this.#maxPublishedLabelEntries) {
+      const oldest = this.#publishedLabels.keys().next().value
+      if (oldest === undefined) break
+      this.#publishedLabels.delete(oldest)
+    }
+  }
+
+  #touch<T>(map: Map<string, T>, key: string, value: T): void {
+    map.delete(key)
+    map.set(key, value)
   }
 }
 
@@ -1072,6 +1261,24 @@ function canonicalJsonText(value: CanonicalJsonValue): string {
   return `{${[...value.entries()].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([key, item]) => `${JSON.stringify(key)}:${canonicalJsonText(item)}`).join(',')}}`
 }
 
+function decodeApplicationLabels(value: Uint8Array | undefined): ReadonlyMap<string, string> | undefined {
+  if (value === undefined) return undefined
+  try {
+    const decoded: unknown = JSON.parse(decodeUtf8(value))
+    if (typeof decoded !== 'object' || decoded === null || Array.isArray(decoded)) return undefined
+    const labels = new Map<string, string>()
+    for (const [key, label] of Object.entries(decoded as Record<string, unknown>)) {
+      if (!/^[mp]:-?(?:0|[1-9][0-9]*)$/u.test(key) || typeof label !== 'string') return undefined
+      labels.set(key, label)
+    }
+    return labels
+  } catch {
+    // Application attribution is advisory and must not make outcome reads fail
+    // if metadata was produced by a non-RPC writer.
+    return undefined
+  }
+}
+
 function mapDiagnostics(diagnostics: readonly CompilerDiagnostic[], applicationLabel?: string): IrDiagnostic[] {
   return diagnostics.map((diagnostic) => {
     const label = applicationLabel ?? diagnostic.location?.builderLabel
@@ -1100,6 +1307,16 @@ function boundedRows(requested: number | undefined, maximum: number, field: stri
   if (requested === undefined) return maximum
   if (!Number.isSafeInteger(requested) || requested < 0) throw invalid(`${field} must be a non-negative integer`)
   return Math.min(requested, maximum)
+}
+
+function positiveSafeInteger(value: number, field: string): number {
+  if (!Number.isSafeInteger(value) || value <= 0) throw new TypeError(`${field} must be a positive safe integer`)
+  return value
+}
+
+function nonnegativeSafeInteger(value: number, field: string): number {
+  if (!Number.isSafeInteger(value) || value < 0) throw new TypeError(`${field} must be a non-negative safe integer`)
+  return value
 }
 
 function principal(context: RpcCallContext): string {
@@ -1135,4 +1352,5 @@ function orderKeyText(key: { readonly authorTimestampMs: bigint; readonly author
 }
 function invalid(message: string): ChronologRpcError { return new ChronologRpcError('invalid_argument', message) }
 function failed(message: string): ChronologRpcError { return new ChronologRpcError('failed_precondition', message) }
+function exhausted(message: string): ChronologRpcError { return new ChronologRpcError('resource_exhausted', message, { retryable: true }) }
 function revisionUnavailable(message: string): ChronologRpcError { return new ChronologRpcError('revision_unavailable', message) }

@@ -40,4 +40,63 @@ describe('StreamResource retry lifecycle', () => {
     unsubscribe()
     resource.dispose()
   })
+
+  it('does not let an aborted run clear and duplicate its manual replacement', async () => {
+    let opens = 0
+    let active = 0
+    const resource = new StreamResource<number>({
+      open: async function* (_cursor, signal) {
+        opens += 1
+        active += 1
+        try {
+          await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }))
+        } finally {
+          active -= 1
+        }
+      },
+      cursor: String,
+    })
+    const unsubscribe = resource.subscribe(() => undefined)
+    await waitFor(() => opens === 1 && active === 1)
+    resource.restart()
+    await waitFor(() => opens === 2 && active === 1)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(opens).toBe(2)
+    unsubscribe()
+    resource.dispose()
+  })
+
+  it('ends iteration immediately when already disposed', async () => {
+    const resource = new StreamResource<number>({ open: async function* () {}, cursor: String })
+    resource.dispose()
+    await expect(resource[Symbol.asyncIterator]().next()).resolves.toEqual({ done: true, value: undefined })
+  })
+
+  it('coalesces pending iterator values to the latest stream revision', async () => {
+    const waiting: Array<(value: number) => void> = []
+    const resource = new StreamResource<number>({
+      open: async function* (_cursor, signal) {
+        while (!signal.aborted) {
+          const value = await new Promise<number>((resolve) => waiting.push(resolve))
+          if (!signal.aborted) yield value
+        }
+      },
+      cursor: String,
+    })
+    const iterator = resource[Symbol.asyncIterator]()
+    const first = iterator.next()
+    await waitFor(() => waiting.length === 1)
+    waiting.shift()?.(1)
+    await expect(first).resolves.toMatchObject({ done: false, value: 1 })
+
+    await waitFor(() => waiting.length === 1)
+    waiting.shift()?.(2)
+    await waitFor(() => resource.getSnapshot().value === 2 && waiting.length === 1)
+    waiting.shift()?.(3)
+    await waitFor(() => resource.getSnapshot().value === 3)
+    await expect(iterator.next()).resolves.toMatchObject({ done: false, value: 3 })
+
+    resource.dispose()
+    await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined })
+  })
 })

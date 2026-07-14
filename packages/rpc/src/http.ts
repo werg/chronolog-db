@@ -1,5 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { once } from 'node:events'
+import type { Socket } from 'node:net'
+import { timingSafeEqual } from 'node:crypto'
 
 import type {
   ChronologRpcService,
@@ -51,6 +53,8 @@ export interface HttpRpcServerOptions {
   readonly port?: number
   readonly token?: string
   readonly maxBodyBytes?: number
+  /** Maximum wait for graceful connection drain before sockets are destroyed. */
+  readonly shutdownTimeoutMs?: number
 }
 
 export interface HttpRpcServerAddress {
@@ -62,12 +66,25 @@ export interface HttpRpcServerAddress {
 export class HttpRpcServer {
   readonly #options: HttpRpcServerOptions
   readonly #server: Server
+  readonly #calls = new Set<AbortController>()
+  readonly #sockets = new Set<Socket>()
+  readonly #shutdownTimeoutMs: number
   #address: HttpRpcServerAddress | null = null
+  #closing = false
+  #closePromise: Promise<void> | undefined
 
   constructor(options: HttpRpcServerOptions) {
     this.#options = options
+    this.#shutdownTimeoutMs = options.shutdownTimeoutMs ?? 5_000
+    if (!Number.isSafeInteger(this.#shutdownTimeoutMs) || this.#shutdownTimeoutMs < 0) {
+      throw new TypeError('shutdownTimeoutMs must be a non-negative safe integer')
+    }
     this.#server = createServer((request, response) => {
       void this.#handle(request, response).catch((error) => writeError(response, error))
+    })
+    this.#server.on('connection', (socket) => {
+      this.#sockets.add(socket)
+      socket.once('close', () => this.#sockets.delete(socket))
     })
   }
 
@@ -75,6 +92,7 @@ export class HttpRpcServer {
 
   async listen(): Promise<HttpRpcServerAddress> {
     if (this.#address) return this.#address
+    if (this.#closing) throw new ChronologRpcError('transport_unavailable', 'RPC server is closed')
     const host = this.#options.host ?? '127.0.0.1'
     const port = this.#options.port ?? 8787
     this.#server.listen(port, host)
@@ -86,13 +104,33 @@ export class HttpRpcServer {
   }
 
   async close(): Promise<void> {
-    if (!this.#server.listening) return
+    if (this.#closePromise !== undefined) return this.#closePromise
+    this.#closing = true
+    for (const controller of this.#calls) controller.abort('RPC server is shutting down')
+    if (!this.#server.listening) {
+      this.#address = null
+      return
+    }
+    this.#closePromise = this.#close()
+    return this.#closePromise
+  }
+
+  async #close(): Promise<void> {
+    const closed = once(this.#server, 'close').then(() => undefined)
     this.#server.close()
-    await once(this.#server, 'close')
+    this.#server.closeIdleConnections?.()
+    const timeout = this.#shutdownTimeoutMs
+    if (!await settlesWithin(closed, timeout)) {
+      for (const socket of this.#sockets) socket.destroy()
+      // Destroyed sockets normally close synchronously on the next turn. Do not
+      // let a broken peer or handler make shutdown unbounded if they do not.
+      await settlesWithin(closed, timeout)
+    }
     this.#address = null
   }
 
   async #handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    if (this.#closing) throw new ChronologRpcError('transport_unavailable', 'RPC server is shutting down', { retryable: true })
     if (request.method === 'GET' && request.url === '/health') {
       response.writeHead(200, { 'content-type': 'application/json' })
       response.end('{"ok":true}')
@@ -104,46 +142,65 @@ export class HttpRpcServer {
     if (!match) throw new ChronologRpcError('not_found', 'RPC route not found')
     const mode = match[1]
     const method = decodeURIComponent(match[2] ?? '')
-    const requestValue = decodeJson(await readBody(request, this.#options.maxBodyBytes ?? 4 * 1024 * 1024))
     const controller = new AbortController()
-    request.once('aborted', () => controller.abort('peer disconnected'))
-    const context: RpcCallContext = {
-      method: method as UnaryRpcMethod,
-      signal: controller.signal,
-      ...(request.socket.remoteAddress === undefined ? {} : { peer: request.socket.remoteAddress }),
-      ...(request.headers.authorization === undefined ? {} : { token: request.headers.authorization.replace(/^Bearer\s+/iu, '') }),
+    const abortPeer = () => controller.abort('peer disconnected')
+    const abortClosedResponse = () => {
+      if (!response.writableFinished) abortPeer()
     }
-    if (mode === 'unary') {
-      if (!unaryMethods.has(method)) throw new ChronologRpcError('not_found', 'Unknown RPC method')
-      const name = unaryDispatch[method as UnaryRpcMethod]
-      const handler = this.#options.service[name] as unknown as (input: unknown, context: RpcCallContext) => Promise<unknown>
-      const value = await handler.call(this.#options.service, requestValue, context)
-      response.writeHead(200, { 'content-type': 'application/json' })
-      response.end(encodeJson({ ok: true, value }))
-      return
-    }
-    if (!streamMethods.has(method)) throw new ChronologRpcError('not_found', 'Unknown RPC method')
-    const name = streamDispatch[method as StreamRpcMethod]
-    const handler = this.#options.service[name] as unknown as (input: unknown, context: RpcCallContext) => AsyncIterable<unknown>
-    const stream = handler.call(this.#options.service, requestValue, context)
-    response.writeHead(200, {
-      'content-type': 'application/x-ndjson',
-      'cache-control': 'no-store',
-      connection: 'keep-alive',
-    })
+    request.once('aborted', abortPeer)
+    response.once('close', abortClosedResponse)
+    request.socket.once('close', abortPeer)
+    this.#calls.add(controller)
     try {
-      for await (const value of stream) {
-        if (!response.write(`${encodeJson({ ok: true, value })}\n`)) await once(response, 'drain')
+      const requestValue = decodeJson(await readBody(request, this.#options.maxBodyBytes ?? 4 * 1024 * 1024))
+      const context: RpcCallContext = {
+        method: method as UnaryRpcMethod,
+        signal: controller.signal,
+        ...(request.socket.remoteAddress === undefined ? {} : { peer: request.socket.remoteAddress }),
+        ...(request.headers.authorization === undefined ? {} : { token: request.headers.authorization.replace(/^Bearer\s+/iu, '') }),
       }
-      response.end()
+      if (mode === 'unary') {
+        if (!unaryMethods.has(method)) throw new ChronologRpcError('not_found', 'Unknown RPC method')
+        const name = unaryDispatch[method as UnaryRpcMethod]
+        const handler = this.#options.service[name] as unknown as (input: unknown, context: RpcCallContext) => Promise<unknown>
+        const value = await handler.call(this.#options.service, requestValue, context)
+        if (controller.signal.aborted || response.destroyed) return
+        response.writeHead(200, { 'content-type': 'application/json' })
+        response.end(encodeJson({ ok: true, value }))
+        return
+      }
+      if (!streamMethods.has(method)) throw new ChronologRpcError('not_found', 'Unknown RPC method')
+      const name = streamDispatch[method as StreamRpcMethod]
+      const handler = this.#options.service[name] as unknown as (input: unknown, context: RpcCallContext) => AsyncIterable<unknown>
+      const stream = handler.call(this.#options.service, requestValue, context)
+      response.writeHead(200, {
+        'content-type': 'application/x-ndjson',
+        'cache-control': 'no-store',
+        connection: 'keep-alive',
+      })
+      for await (const value of stream) {
+        if (controller.signal.aborted || response.destroyed) break
+        if (!response.write(`${encodeJson({ ok: true, value })}\n`)) await waitForDrain(response, controller.signal)
+      }
+      if (!response.writableEnded && !response.destroyed) response.end()
     } catch (error) {
-      if (!response.writableEnded) response.end(`${encodeJson(errorPayload(error))}\n`)
+      if (!response.headersSent && !controller.signal.aborted) throw error
+      if (!controller.signal.aborted && !response.writableEnded && !response.destroyed) {
+        response.end(`${encodeJson(errorPayload(error))}\n`)
+      }
+    } finally {
+      this.#calls.delete(controller)
+      request.removeListener('aborted', abortPeer)
+      response.removeListener('close', abortClosedResponse)
+      request.socket.removeListener('close', abortPeer)
     }
   }
 
   #authorize(request: IncomingMessage): void {
     if (this.#options.token === undefined) return
-    if (request.headers.authorization !== `Bearer ${this.#options.token}`) {
+    const provided = Buffer.from(request.headers.authorization ?? '')
+    const expected = Buffer.from(`Bearer ${this.#options.token}`)
+    if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) {
       throw new ChronologRpcError('unauthenticated', 'Invalid RPC bearer token')
     }
   }
@@ -261,11 +318,44 @@ function fromErrorPayload(payload: Extract<RpcPayload<never>, { ok: false }>): C
 }
 
 function writeError(response: ServerResponse, error: unknown): void {
-  if (response.writableEnded) return
+  if (response.writableEnded || response.destroyed) return
   const normalized = toChronologRpcError(error)
   const status = normalized.code === 'unauthenticated' ? 401 : normalized.code === 'not_found' ? 404 : 400
   response.writeHead(status, { 'content-type': 'application/json' })
   response.end(encodeJson(errorPayload(normalized)))
+}
+
+function waitForDrain(response: ServerResponse, signal: AbortSignal): Promise<void> {
+  if (signal.aborted || response.destroyed) return Promise.reject(signal.reason)
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      response.removeListener('drain', drained)
+      response.removeListener('close', closed)
+      response.removeListener('error', failed)
+      signal.removeEventListener('abort', aborted)
+    }
+    const drained = () => { cleanup(); resolve() }
+    const closed = () => { cleanup(); reject(new ChronologRpcError('cancelled', 'RPC peer disconnected')) }
+    const failed = (error: Error) => { cleanup(); reject(error) }
+    const aborted = () => { cleanup(); reject(signal.reason) }
+    response.once('drain', drained)
+    response.once('close', closed)
+    response.once('error', failed)
+    signal.addEventListener('abort', aborted, { once: true })
+  })
+}
+
+async function settlesWithin(promise: Promise<void>, milliseconds: number): Promise<boolean> {
+  if (milliseconds === 0) return false
+  let timeout: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      promise.then(() => true),
+      new Promise<false>((resolve) => { timeout = setTimeout(() => resolve(false), milliseconds) }),
+    ])
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout)
+  }
 }
 
 async function readBody(request: IncomingMessage, maximum: number): Promise<string> {

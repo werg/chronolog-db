@@ -109,33 +109,44 @@ export class StreamResource<T> implements AsyncIterable<T> {
   }
 
   async *[Symbol.asyncIterator](): AsyncIterator<T> {
-    const values: T[] = []
-    let resolve: (() => void) | undefined
+    let pending: { readonly value: T } | undefined
+    let wake: (() => void) | undefined
     let finished = false
     const onValue = (value: T) => {
-      values.push(value)
-      resolve?.()
-      resolve = undefined
+      // Streams represent revision snapshots, so a slow iterator only needs the
+      // newest value. Coalescing here prevents an unbounded per-iterator queue.
+      pending = { value }
+      wake?.()
+      wake = undefined
     }
     const onState = () => {
       const state = this.#snapshot
       if (state.status === 'error' || state.status === 'closed') {
         finished = true
-        resolve?.()
-        resolve = undefined
+        wake?.()
+        wake = undefined
       }
     }
     this.#valueListeners.add(onValue)
     const unsubscribe = this.subscribe(onState)
+    // subscribe() is intentionally a no-op for an already disposed resource.
+    // Inspect the current snapshot so an iterator created after disposal ends
+    // immediately instead of waiting for an event that can never arrive.
+    onState()
     try {
-      while (!finished || values.length > 0) {
-        const value = values.shift()
-        if (value !== undefined) {
-          yield value
+      while (!finished || pending !== undefined) {
+        const next = pending
+        pending = undefined
+        if (next !== undefined) {
+          yield next.value
           continue
         }
         await new Promise<void>((next) => {
-          resolve = next
+          wake = next
+          if (finished || pending !== undefined) {
+            wake = undefined
+            next()
+          }
         })
       }
       if (this.#snapshot.status === 'error') throw this.#snapshot.error
@@ -150,13 +161,17 @@ export class StreamResource<T> implements AsyncIterable<T> {
     if (this.#listeners.size === 0 && this.#valueListeners.size === 0) return
     const controller = new AbortController()
     this.#controller = controller
-    this.#run = this.#consume(controller.signal).finally(() => {
+    const run = this.#consume(controller.signal).finally(() => {
+      // A manual restart may already have installed a replacement consumer.
+      // Completion of the aborted run must not clear or duplicate that run.
+      if (this.#run !== run) return
       if (this.#controller === controller) this.#controller = undefined
       this.#run = undefined
       if (!this.#disposed && !this.#terminal && (this.#listeners.size > 0 || this.#valueListeners.size > 0)) {
         queueMicrotask(() => this.#start())
       }
     })
+    this.#run = run
   }
 
   async #consume(signal: AbortSignal): Promise<void> {

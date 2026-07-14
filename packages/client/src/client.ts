@@ -691,10 +691,14 @@ function errorFromUnknown(value: unknown): Error {
 function delay(milliseconds: number, signal?: AbortSignal): Promise<void> {
   if (signal?.aborted === true) return Promise.reject(signal.reason)
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(resolve, milliseconds)
-    signal?.addEventListener('abort', () => {
+    const abort = () => {
       clearTimeout(timeout)
-      reject(signal.reason)
-    }, { once: true })
+      reject(signal?.reason)
+    }
+    const timeout = setTimeout(() => {
+      signal?.removeEventListener('abort', abort)
+      resolve()
+    }, milliseconds)
+    signal?.addEventListener('abort', abort, { once: true })
   })
 }

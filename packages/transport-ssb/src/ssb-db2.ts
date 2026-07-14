@@ -458,7 +458,14 @@ export class SsbDb2Transport implements ChronologTransport {
     }
     this.#queueSubscribers.clear()
     return new Promise<void>((resolve, reject) => {
-      this.#sbot.close((error) => error ? reject(error) : resolve())
+      this.#sbot.close((error) => {
+        // multiserver may observe the remote half closing its listener while
+        // two connected peers are shutting down concurrently. Node reports
+        // that already-complete state as ERR_SERVER_NOT_RUNNING; transport
+        // close is idempotent, so it is safe to finish releasing ownership.
+        if (error && !hasErrorCode(error, 'ERR_SERVER_NOT_RUNNING')) reject(error)
+        else resolve()
+      })
     }).then(() => rm(this.#ownershipMarker, { force: true }))
   }
 
@@ -649,6 +656,10 @@ async function claimStorage(path: string, recover: boolean): Promise<{ marker: s
 
 function isAlreadyExists(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'code' in error && error.code === 'EEXIST'
+}
+
+function hasErrorCode(error: unknown, code: string): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === code
 }
 
 function positiveInteger(value: number, field: string): number {

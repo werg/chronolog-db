@@ -23,6 +23,8 @@ export const DEFAULT_DECODE_LIMITS: Readonly<DecodeLimits> = Object.freeze({
 })
 
 const MAX_UINT64 = (1n << 64n) - 1n
+const POSITIVE_BIGNUM_TAG = 2n
+const NEGATIVE_BIGNUM_TAG = 3n
 
 function encodeHead(major: number, value: bigint): Uint8Array {
   canonicalInvariant(value >= 0n && value <= MAX_UINT64, 'INTEGER_OUT_OF_RANGE', 'CBOR integer is outside uint64 range')
@@ -37,13 +39,33 @@ function encodeHead(major: number, value: bigint): Uint8Array {
   new DataView(bytes.buffer).setBigUint64(1, value, false); return bytes
 }
 
+function magnitudeBytes(value: bigint): Uint8Array {
+  canonicalInvariant(value > MAX_UINT64, 'INTEGER_OUT_OF_RANGE', 'CBOR bignum must exceed uint64 range')
+  const octets: number[] = []
+  for (let remaining = value; remaining > 0n; remaining >>= 8n) octets.push(Number(remaining & 0xffn))
+  octets.reverse()
+  return Uint8Array.from(octets)
+}
+
+function encodeBigint(value: bigint): Uint8Array {
+  const negative = value < 0n
+  const magnitude = negative ? -1n - value : value
+  if (magnitude <= MAX_UINT64) return encodeHead(negative ? 1 : 0, magnitude)
+  const bytes = magnitudeBytes(magnitude)
+  return concatBytes(
+    encodeHead(6, negative ? NEGATIVE_BIGNUM_TAG : POSITIVE_BIGNUM_TAG),
+    encodeHead(2, BigInt(bytes.length)),
+    bytes,
+  )
+}
+
 function isMap(value: CborValue): value is ReadonlyMap<CborMapKey, CborValue> { return value instanceof Map }
 
 export function encodeCanonicalCbor(value: CborValue): Uint8Array {
   if (value === null) return Uint8Array.of(0xf6)
   if (value === false) return Uint8Array.of(0xf4)
   if (value === true) return Uint8Array.of(0xf5)
-  if (typeof value === 'bigint') return value >= 0n ? encodeHead(0, value) : encodeHead(1, -1n - value)
+  if (typeof value === 'bigint') return encodeBigint(value)
   if (typeof value === 'string') { const bytes = utf8(value); return concatBytes(encodeHead(3, BigInt(bytes.length)), bytes) }
   if (value instanceof Uint8Array) return concatBytes(encodeHead(2, BigInt(value.length)), value)
   if (Array.isArray(value)) return concatBytes(encodeHead(4, BigInt(value.length)), ...value.map(encodeCanonicalCbor))
@@ -81,6 +103,22 @@ class Decoder {
     if (additional === 31) throw new CanonicalError('CBOR_NON_CANONICAL', 'Indefinite-length CBOR is prohibited')
     throw new CanonicalError('CBOR_INVALID', 'Reserved CBOR additional information')
   }
+  private bignum(tag: bigint, depth: number): bigint {
+    canonicalInvariant(tag === POSITIVE_BIGNUM_TAG || tag === NEGATIVE_BIGNUM_TAG, 'CBOR_INVALID', 'Unsupported CBOR tag')
+    canonicalInvariant(depth < this.limits.maxDepth, 'CBOR_LIMIT_EXCEEDED', 'CBOR nesting exceeds limit')
+    const initial = this.byte(), major = initial >> 5, additional = initial & 31
+    canonicalInvariant(major === 2, 'CBOR_INVALID', 'CBOR bignum payload must be a byte string')
+    const argument = this.argument(additional)
+    canonicalInvariant(argument <= BigInt(Number.MAX_SAFE_INTEGER), 'CBOR_LIMIT_EXCEEDED', 'CBOR bignum is too large')
+    const size = Number(argument)
+    canonicalInvariant(size <= this.limits.maxBlobBytes, 'CBOR_LIMIT_EXCEEDED', 'CBOR bignum exceeds blob limit')
+    const bytes = this.bytes(size)
+    canonicalInvariant(bytes.length > 8 && bytes[0] !== 0, 'CBOR_NON_CANONICAL', 'CBOR bignum is not minimally encoded')
+    let magnitude = 0n
+    for (const byte of bytes) magnitude = (magnitude << 8n) | BigInt(byte)
+    canonicalInvariant(magnitude > MAX_UINT64, 'CBOR_NON_CANONICAL', 'CBOR bignum must use the ordinary integer representation')
+    return tag === POSITIVE_BIGNUM_TAG ? magnitude : -1n - magnitude
+  }
   private value(depth: number): CborValue {
     canonicalInvariant(depth <= this.limits.maxDepth, 'CBOR_LIMIT_EXCEEDED', 'CBOR nesting exceeds limit')
     const initial = this.byte(), major = initial >> 5, additional = initial & 31
@@ -88,8 +126,8 @@ class Decoder {
       if (additional === 20) return false; if (additional === 21) return true; if (additional === 22) return null
       throw new CanonicalError('CBOR_INVALID', 'Floating point and unsupported simple CBOR values are prohibited')
     }
-    canonicalInvariant(major !== 6, 'CBOR_INVALID', 'CBOR tags are prohibited')
     const argument = this.argument(additional)
+    if (major === 6) return this.bignum(argument, depth + 1)
     if (major === 0) return argument
     if (major === 1) return -1n - argument
     canonicalInvariant(argument <= BigInt(Number.MAX_SAFE_INTEGER), 'CBOR_LIMIT_EXCEEDED', 'CBOR collection is too large')

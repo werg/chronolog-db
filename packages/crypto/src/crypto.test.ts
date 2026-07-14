@@ -10,13 +10,32 @@ import {
   generateX25519KeyPair,
   hpkeOpenBase,
   hpkeSealBase,
+  importX25519PrivateKey,
   unwrapEpochKey,
   verifyEpochManifest,
 } from './index.js'
 
 const bytes = (value: number, length = 32) => new Uint8Array(length).fill(value)
+const hex = (value: string) => Uint8Array.from(Buffer.from(value, 'hex'))
 
 describe('RFC 9180 base-mode adapter', () => {
+  it('opens the published CFRG X25519/HKDF-SHA256/AES-256-GCM vector', async () => {
+    // CFRG source vector: https://github.com/cfrg/draft-irtf-cfrg-hpke/blob/master/test-vectors.json
+    const privateKey = await importX25519PrivateKey(hex(
+      '302e020100300506032b656e04220420' +
+      '497b4502664cfea5d5af0b39934dac72242a74f8480451e1aee7d6a53320333d',
+    ))
+    const plaintext = await hpkeOpenBase(
+      privateKey,
+      hex('430f4b9859665145a6b1ba274024487bd66f03a2dd577d7753c68d7d7d00c00c'),
+      hex('6c93e09869df3402d7bf231bf540fadd35cd56be14f97178f0954db94b7fc256'),
+      hex('e5d84cd531cfb583096e7cfa9641bd3079cf3a91cda813c52deb5f512be9931980a41de125a925cdad859d5b7a'),
+      hex('4f6465206f6e2061204772656369616e2055726e'),
+      hex('436f756e742d30'),
+    )
+    expect(plaintext).toEqual(hex('4265617574792069732074727574682c20747275746820626561757479'))
+  })
+
   it('seals to an X25519 recipient and authenticates info and AAD', async () => {
     const recipient = await generateX25519KeyPair()
     const info = utf8('chronolog epoch context')

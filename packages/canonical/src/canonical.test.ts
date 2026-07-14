@@ -13,6 +13,23 @@ describe('canonical primitives', () => {
     expect(decodeCanonicalCbor(encodeCanonicalCbor(value), DEFAULT_DECODE_LIMITS)).toEqual(new Map([[1n, 'a'], [2n, 'b']]))
   })
 
+  it('round-trips canonical positive and negative bignums beyond uint64', () => {
+    const positive = 12_345_678_901_234_567_890_123_456_789_012_345_678n
+    const negative = -positive
+    expect(bytesToHex(encodeCanonicalCbor(positive))).toBe('c2500949b0f6f0023313c4499050de38f34e')
+    expect(decodeCanonicalCbor(encodeCanonicalCbor(positive), DEFAULT_DECODE_LIMITS)).toBe(positive)
+    expect(decodeCanonicalCbor(encodeCanonicalCbor(negative), DEFAULT_DECODE_LIMITS)).toBe(negative)
+  })
+
+  it.each([
+    // Tags remain forbidden except for minimally encoded RFC 8949 bignums.
+    Uint8Array.of(0xc1, 0x00),
+    Uint8Array.of(0xc2, 0x41, 0x01),
+    Uint8Array.of(0xc2, 0x49, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00),
+  ])('rejects unsupported or noncanonical CBOR tags %#', (bytes) => {
+    expect(() => assertCanonicalCbor(bytes, DEFAULT_DECODE_LIMITS)).toThrow()
+  })
+
   it.each([
     Uint8Array.of(0x18, 0x17),
     Uint8Array.of(0x9f, 0xff),

@@ -205,6 +205,21 @@ describe('DeterministicMaterializer IR reducer', () => {
     materializer.close()
   })
 
+  it('keeps query rows and provenance pinned while a new revision is published', async () => {
+    const materializer = await open()
+    const query = materializer.queryIr(balanceQuery(8_000))
+    const update = await transaction(1, 10n, [setBalance(8_100, 90n)])
+    await materializer.materialize([update])
+
+    const observed = await query
+    expect(observed.revision).toBe(0n)
+    expect(observed.orderLength).toBe(0)
+    expect(observed.result.rows).toEqual([[{ kind: 'int64', value: 100n }]])
+    expect(materializer.revision).toBe(1n)
+    expect(integerResult(materializer, 'SELECT balance FROM accounts')).toBe(90n)
+    materializer.close()
+  })
+
   it('rolls back every mutation when a later command rejects', async () => {
     const materializer = await open()
     const candidate = await transaction(1, 10n, [

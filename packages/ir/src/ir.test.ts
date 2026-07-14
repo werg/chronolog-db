@@ -19,6 +19,18 @@ describe('logical values and canonical JSON', () => {
     expect(() => encodeLogicalValue({ kind: 'timestamp_ms', value: -1n })).toThrow()
   })
 
+  it('round-trips the full advertised 38-digit decimal and exact JSON integer range', () => {
+    const coefficient = 12_345_678_901_234_567_890_123_456_789_012_345_678n
+    const decimal = { kind: 'decimal' as const, coefficient, scale: 0 }
+    expect(decodeLogicalValue(encodeLogicalValue(decimal))).toEqual(decimal)
+
+    const json = {
+      kind: 'json' as const,
+      value: new Map<string, bigint | typeof decimal>([['integer', coefficient], ['decimal', decimal]]),
+    }
+    expect(decodeLogicalValue(encodeLogicalValue(json))).toEqual(json)
+  })
+
   it('copies caller-owned byte arrays in public constructors', () => {
     const source = Uint8Array.of(1, 2, 3)
     const value = values.blob(source)

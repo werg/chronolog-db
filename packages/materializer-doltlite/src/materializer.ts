@@ -221,6 +221,16 @@ export class DeterministicMaterializer implements MaterializerIrBackend {
   async queryIr(query: Query, options: QueryIrOptions = {}): Promise<MaterializedIrQueryResult> {
     this.#assertOpen()
     this.#assertRevision(options.atRevision)
+    // Pin the observation metadata before executing. JavaScript does not
+    // interleave synchronous query execution, but keeping this snapshot
+    // explicit prevents a future asynchronous executor or digest refactor from
+    // pairing rows from one immutable reader with another published revision.
+    const observation = {
+      revision: this.revision,
+      orderLength: this.orderLength,
+      schemaDigest: this.schemaDigest,
+      executionManifestDigest: this.executionManifestDigest,
+    }
     const diagnostics = this.validateQuery(query)
     if (diagnostics.length > 0) throw new MaterializerInputError(diagnostics[0]!.code)
     const compiled = compileQuery(query, this.#compiledSchema.catalog)
@@ -233,13 +243,11 @@ export class DeterministicMaterializer implements MaterializerIrBackend {
       {},
       'local_read',
     )
+    const resultDigest = await digestCanonicalQueryResult(result)
     return {
-      revision: this.revision,
-      orderLength: this.orderLength,
-      schemaDigest: this.schemaDigest,
-      executionManifestDigest: this.executionManifestDigest,
+      ...observation,
       result,
-      resultDigest: await digestCanonicalQueryResult(result),
+      resultDigest,
     }
   }
 

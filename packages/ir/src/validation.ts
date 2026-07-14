@@ -1,9 +1,9 @@
-import { CanonicalError, decodeUtf8, equalBytes, utf8 } from '@chronolog/canonical'
+import { CanonicalError, decodeUtf8, utf8 } from '@chronolog/canonical'
 
 import { collectRelationEffects, semanticComplexity, walkExpr, walkProgram, walkQuery } from './visitors.js'
 import type {
   CanonicalJsonValue, CanonicalQueryResult, ExecutionManifest, Expr, IrDiagnostic, IrValidationResult,
-  LogicalType, LogicalValue, Mutation, OrderingProof, Query, SchemaManifest, TransactionProgram, ValueType,
+  LogicalType, LogicalValue, Mutation, OrderingProof, Query, SchemaManifest, TransactionProgram,
 } from './types.js'
 
 const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/u
@@ -48,8 +48,8 @@ function validateJson(value: CanonicalJsonValue, d: Diagnostics, path: string, d
   if (depth > 64) { d.add('JSON_DEPTH_EXCEEDED', 'JSON nesting exceeds portable limit', undefined, path); return }
   if (value === null || typeof value === 'boolean' || typeof value === 'bigint') return
   if (typeof value === 'string') { try { utf8(value) } catch { d.add('JSON_TEXT_INVALID', 'JSON string is invalid Unicode', undefined, path) }; return }
-  if (Array.isArray(value)) { value.forEach((item, index) => validateJson(item, d, `${path}[${index}]`, depth + 1)); return }
-  if (value instanceof Map) { for (const [key, item] of value) { try { utf8(key) } catch { d.add('JSON_KEY_INVALID', 'JSON key is invalid Unicode', undefined, path) }; validateJson(item, d, `${path}.${key}`, depth + 1) }; return }
+  if (Array.isArray(value)) { (value as readonly CanonicalJsonValue[]).forEach((item, index) => validateJson(item, d, `${path}[${index}]`, depth + 1)); return }
+  if (value instanceof Map) { for (const [key, item] of value as ReadonlyMap<string, CanonicalJsonValue>) { try { utf8(key) } catch { d.add('JSON_KEY_INVALID', 'JSON key is invalid Unicode', undefined, path) }; validateJson(item, d, `${path}.${key}`, depth + 1) }; return }
   const decimal = value as { readonly kind: 'decimal'; readonly coefficient: bigint; readonly scale: number }
   if (decimal.scale < 0 || decimal.scale > 38 || (decimal.scale > 0 && decimal.coefficient % 10n === 0n)) d.add('JSON_DECIMAL_INVALID', 'JSON decimal is not normalized', undefined, path)
 }
@@ -189,8 +189,8 @@ export function validateCanonicalQueryResult(result: CanonicalQueryResult): IrVa
 function appendResultDiagnostics(result: CanonicalQueryResult, d: Diagnostics, ownerId?: number): void {
   const ids = new Set<number>()
   for (const column of result.columns) { if (ids.has(column.id)) d.add('DUPLICATE_PROJECTION_ID', 'Result contains duplicate projection IDs', column.id); ids.add(column.id); validateIdentifier(column.name, d, column.id, 'result.column'); for (const diagnostic of validateLogicalType(column.valueType.logical)) d.add(diagnostic.code, diagnostic.message, column.id) }
-  for (let row = 0; row < result.rows.length; row += 1) { if (result.rows[row]!.length !== result.columns.length) d.add('RESULT_WIDTH_INVALID', 'Result row width differs from output schema', undefined, `rows[${row}]`); result.rows[row]!.forEach((value, column) => validateValue(value, d, `rows[${row}][${column}]`, 0)) }
-  if (result.resultMode.kind === 'scalar' && (result.columns.length !== 1 || result.rows.length > 1)) d.add('SCALAR_RESULT_INVALID', 'Scalar result must have one column and at most one row')
+  for (let row = 0; row < result.rows.length; row += 1) { if (result.rows[row]!.length !== result.columns.length) d.add('RESULT_WIDTH_INVALID', 'Result row width differs from output schema', ownerId, `rows[${row}]`); result.rows[row]!.forEach((value, column) => validateValue(value, d, `rows[${row}][${column}]`, 0)) }
+  if (result.resultMode.kind === 'scalar' && (result.columns.length !== 1 || result.rows.length > 1)) d.add('SCALAR_RESULT_INVALID', 'Scalar result must have one column and at most one row', ownerId)
 }
 
 export function validateSchemaManifest(schema: SchemaManifest): IrValidationResult<SchemaManifest> {

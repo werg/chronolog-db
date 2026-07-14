@@ -85,10 +85,11 @@ export async function decodeSignedEnvelope(
   if (!Array.isArray(value) || value.length !== 5 || value[0] !== 1n) {
     throw wireError('WIRE_SCHEMA_INVALID')
   }
-  const typeIndex = value[1]
-  const payload = value[2]
-  const signer = value[3]
-  const signature = value[4]
+  const fields = value as readonly CborValue[]
+  const typeIndex = fields[1]
+  const payload = fields[2]
+  const signer = fields[3]
+  const signature = fields[4]
   if (
     typeof typeIndex !== 'bigint' ||
     typeIndex < 0n ||

@@ -54,7 +54,7 @@ function service(overrides: Partial<ChronologRpcService>): ChronologRpcService {
     getReplicationStatus: missing,
     streamReplicationStatus: missingStream,
     ...overrides,
-  } as ChronologRpcService
+  }
 }
 
 describe('InProcessRpcTransport', () => {

@@ -20,7 +20,7 @@ export class CanonicalError extends Error {
 
 export function canonicalInvariant(
   condition: unknown,
-  code: CanonicalErrorCode | string,
+  code: string,
   message: string,
   details?: Readonly<Record<string, unknown>>,
 ): asserts condition {

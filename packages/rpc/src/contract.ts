@@ -114,4 +114,4 @@ export interface ChronologRpcService {
   streamReplicationStatus(request: StreamReplicationStatusRequest, context: RpcCallContext): AsyncIterable<ReplicationStatus>
 }
 
-export interface ChronologService extends ChronologRpcService {}
+export type ChronologService = ChronologRpcService

@@ -35,13 +35,11 @@ import type {
   CanonicalQueryResult,
   CollationId,
   ExecutionManifest,
-  Expr,
   LogicalType,
   LogicalValue,
   Mutation,
   Precondition,
   Query,
-  ResultMode,
   SchemaManifest,
   TransactionProgram,
   VectorElementType,
@@ -218,8 +216,9 @@ function logicalValueFromCbor(value: CborValue): LogicalValue {
 
 function jsonToCbor(value: CanonicalJsonValue): CborValue {
   if (value === null || typeof value === 'boolean' || typeof value === 'bigint' || typeof value === 'string') return value
-  if (Array.isArray(value)) return value.map(jsonToCbor)
-  if (value instanceof Map) return new Map([...value].map(([key, item]) => [key, jsonToCbor(item)]))
+  if (Array.isArray(value)) return (value as readonly CanonicalJsonValue[]).map(jsonToCbor)
+  if (value instanceof Map) return new Map([...(value as ReadonlyMap<string, CanonicalJsonValue>)]
+    .map(([key, item]) => [key, jsonToCbor(item)]))
   const decimal = value as { readonly kind: 'decimal'; readonly coefficient: bigint; readonly scale: number }
   return [BigInt(IR_TAGS.valueDecimal), decimal.coefficient, uint(decimal.scale, 'json.decimal.scale')]
 }
@@ -228,12 +227,16 @@ function jsonFromCbor(value: CborValue): CanonicalJsonValue {
   if (value === null || typeof value === 'boolean' || typeof value === 'bigint' || typeof value === 'string') return value
   if (value instanceof Uint8Array) throw new Error('IR_JSON_BLOB_FORBIDDEN')
   if (value instanceof Map) {
+    const entries = value as ReadonlyMap<CborMapKey, CborValue>
     const result = new Map<string, CanonicalJsonValue>()
-    for (const [key, item] of value) { canonicalInvariant(typeof key === 'string', 'SCHEMA_INVALID', 'JSON object keys must be text'); result.set(key, jsonFromCbor(item)) }
+    for (const [key, item] of entries) { canonicalInvariant(typeof key === 'string', 'SCHEMA_INVALID', 'JSON object keys must be text'); result.set(key, jsonFromCbor(item)) }
     return result
   }
-  if (Array.isArray(value) && value.length === 3 && value[0] === BigInt(IR_TAGS.valueDecimal)) return { kind: 'decimal', coefficient: expectBigint(value[1] ?? null, 'json.decimal.coefficient'), scale: Number(expectBigint(value[2] ?? null, 'json.decimal.scale')) }
-  if (Array.isArray(value)) return value.map(jsonFromCbor)
+  if (Array.isArray(value)) {
+    const items = value as readonly CborValue[]
+    if (items.length === 3 && items[0] === BigInt(IR_TAGS.valueDecimal)) return { kind: 'decimal', coefficient: expectBigint(items[1] ?? null, 'json.decimal.coefficient'), scale: Number(expectBigint(items[2] ?? null, 'json.decimal.scale')) }
+    return items.map(jsonFromCbor)
+  }
   throw new Error('IR_INVALID_JSON')
 }
 
@@ -318,8 +321,8 @@ function tagFor(record: Record<string, unknown>): RecordTag | undefined {
 function genericToCbor(value: unknown): CborValue {
   if (value === null || typeof value === 'boolean' || typeof value === 'bigint' || typeof value === 'string' || value instanceof Uint8Array) return value
   if (typeof value === 'number') return numberMarker(value)
-  if (Array.isArray(value)) return value.map(genericToCbor)
-  if (value instanceof Map) return new Map([...value].map(([key, item]) => {
+  if (Array.isArray(value)) return (value as readonly unknown[]).map(genericToCbor)
+  if (value instanceof Map) return new Map([...(value as ReadonlyMap<unknown, unknown>)].map(([key, item]) => {
     const canonicalKey = typeof key === 'number'
       ? uint(key, 'map key')
       : key
@@ -370,24 +373,27 @@ function tagForTypeKind(kind: string): number { return ({ boolean: IR_TAGS.typeB
 function genericFromCbor(value: CborValue): unknown {
   if (value === null || typeof value === 'boolean' || typeof value === 'bigint' || typeof value === 'string' || value instanceof Uint8Array) return value instanceof Uint8Array ? Uint8Array.from(value) : value
   if (value instanceof Map) {
-    if (value.size === 1 && value.has(-1n)) return Number(expectBigint(value.get(-1n) ?? null, 'number'))
-    const keys = [...value.keys()]
+    const entries = value as ReadonlyMap<CborMapKey, CborValue>
+    if (entries.size === 1 && entries.has(-1n)) return Number(expectBigint(entries.get(-1n) ?? null, 'number'))
+    const keys = [...entries.keys()]
     if (keys.every((key) => typeof key === 'string')) {
       const result: Record<string, unknown> = {}
-      for (const [key, item] of value) result[key as string] = genericFromCbor(item)
+      for (const [key, item] of entries) result[key as string] = genericFromCbor(item)
       return result
     }
     const map = new Map<CborMapKey, unknown>()
-    for (const [key, item] of value) map.set(key instanceof Uint8Array ? Uint8Array.from(key) : key, genericFromCbor(item))
+    for (const [key, item] of entries) map.set(key instanceof Uint8Array ? Uint8Array.from(key) : key, genericFromCbor(item))
     return map
   }
-  if (Array.isArray(value) && value.length > 0 && typeof value[0] === 'bigint') {
-    const tag = Number(value[0])
-    if (VALUE_TAGS.has(tag)) return logicalValueFromCbor(value)
-    if (TYPE_TAGS.has(tag)) return logicalTypeFromCbor(value)
+  if (Array.isArray(value)) {
+    const items = value as readonly CborValue[]
+    if (items.length === 0 || typeof items[0] !== 'bigint') return items.map(genericFromCbor)
+    const tag = Number(items[0])
+    if (VALUE_TAGS.has(tag)) return logicalValueFromCbor(items)
+    if (TYPE_TAGS.has(tag)) return logicalTypeFromCbor(items)
     const kind = TAG_KIND.get(tag) ?? schemaOrRelationKind(tag)
-    canonicalInvariant((kind !== undefined || NON_DISCRIMINATED_RECORD_TAGS.has(tag)) && value.length === 2, 'SCHEMA_INVALID', `Unknown or malformed IR tag ${tag}`)
-    const encodedFields = expectMap(value[1]!, `IR tag ${tag} fields`)
+    canonicalInvariant((kind !== undefined || NON_DISCRIMINATED_RECORD_TAGS.has(tag)) && items.length === 2, 'SCHEMA_INVALID', `Unknown or malformed IR tag ${tag}`)
+    const encodedFields = expectMap(items[1] ?? null, `IR tag ${tag} fields`)
     const knownFields = TAG_FIELDS.get(tag)
     canonicalInvariant(knownFields !== undefined, 'SCHEMA_INVALID', `IR tag ${tag} has no field registry`)
     const fields: Record<string, unknown> = {}
@@ -397,7 +403,6 @@ function genericFromCbor(value: CborValue): unknown {
     }
     return kind === undefined ? fields : { kind, ...fields }
   }
-  if (Array.isArray(value)) return value.map(genericFromCbor)
   throw new Error('IR_INVALID_CBOR_VALUE')
 }
 

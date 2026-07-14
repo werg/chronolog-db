@@ -18,7 +18,7 @@ export function expectMap(value: CborValue, name: string): IntegerMap {
 
 export function expectArray(value: CborValue, name: string): readonly CborValue[] {
   protocolInvariant(Array.isArray(value), 'SCHEMA_INVALID', `${name} must be a CBOR array`)
-  return value
+  return value as readonly CborValue[]
 }
 
 export function expectBytes(value: CborValue, name: string, length?: number): Uint8Array {
@@ -77,4 +77,3 @@ export function expectVersion(map: IntegerMap, expected: bigint, name: string): 
   const version = expectUint64(required(map, 0, `${name}.version`), `${name}.version`)
   protocolInvariant(version === expected, 'UNSUPPORTED_VERSION', `Unsupported ${name} version`, { version: version.toString() })
 }
-

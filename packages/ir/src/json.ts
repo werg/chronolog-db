@@ -9,9 +9,10 @@ export function canonicalJsonToText(value: CanonicalJsonValue): string {
   if (value === false) return 'false'
   if (typeof value === 'bigint') return value.toString(10)
   if (typeof value === 'string') return quote(value)
-  if (Array.isArray(value)) return `[${value.map(canonicalJsonToText).join(',')}]`
+  if (Array.isArray(value)) return `[${(value as readonly CanonicalJsonValue[]).map(canonicalJsonToText).join(',')}]`
   if (value instanceof Map) {
-    const entries = [...value].map(([key, item]) => ({ key, item, bytes: utf8(key) }))
+    const entries = [...(value as ReadonlyMap<string, CanonicalJsonValue>)]
+      .map(([key, item]) => ({ key, item, bytes: utf8(key) }))
       .sort((left, right) => compareBytes(left.bytes, right.bytes))
     return `{${entries.map(({ key, item }) => `${quote(key)}:${canonicalJsonToText(item)}`).join(',')}}`
   }

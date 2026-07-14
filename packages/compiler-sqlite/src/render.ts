@@ -225,8 +225,10 @@ function assertEntropyRequest(expression: Extract<Expr, { kind: 'entropy' }>): v
 
 function jsonDepth(value: Extract<LogicalValue, { kind: 'json' }>['value']): number {
   if (value === null || typeof value === 'boolean' || typeof value === 'bigint' || typeof value === 'string') return 0
-  if (Array.isArray(value)) return 1 + value.reduce((maximum, item) => Math.max(maximum, jsonDepth(item)), 0)
-  if (value instanceof Map) return 1 + [...value.values()].reduce((maximum, item) => Math.max(maximum, jsonDepth(item)), 0)
+  if (Array.isArray(value)) return 1 + (value as readonly (Extract<LogicalValue, { kind: 'json' }>['value'])[])
+    .reduce((maximum, item) => Math.max(maximum, jsonDepth(item)), 0)
+  if (value instanceof Map) return 1 + [...(value as ReadonlyMap<string, Extract<LogicalValue, { kind: 'json' }>['value']>).values()]
+    .reduce((maximum, item) => Math.max(maximum, jsonDepth(item)), 0)
   return 0
 }
 

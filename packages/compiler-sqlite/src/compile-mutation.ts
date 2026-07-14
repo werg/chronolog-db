@@ -8,7 +8,7 @@ import type {
 } from '@chronolog/ir'
 import { validateTransactionProgram } from '@chronolog/ir'
 
-import { Catalog } from './catalog.js'
+import type { Catalog } from './catalog.js'
 import { compileQuery } from './compile-query.js'
 import { quoteIdentifier, SqlRenderer, type RelationScope } from './render.js'
 import { CompilerError, type CompiledMutation, type CompiledPrecondition, type CompiledProgram } from './types.js'

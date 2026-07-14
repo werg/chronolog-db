@@ -6,10 +6,7 @@ import {
   digestCanonicalQueryResult,
   type AffectedRowsExpectation,
   type CanonicalQueryResult,
-  type LogicalType,
   type LogicalValue,
-  type Precondition,
-  type ResultColumn,
   type ValueType,
 } from '@chronolog/ir'
 import { assertDecimalPrecision, decimalRescale, deriveEntropy, formatDecimal, parseDecimal } from '@chronolog/kernels'

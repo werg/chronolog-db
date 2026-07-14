@@ -60,7 +60,7 @@ export interface EncryptedEpochPayload {
 }
 
 function source(value: Uint8Array): ArrayBuffer {
-  return value.slice().buffer as ArrayBuffer
+  return value.slice().buffer
 }
 
 function wrapContext(groupId: Uint8Array, epoch: bigint, previous: Uint8Array | null, recipientId: Uint8Array): Uint8Array {

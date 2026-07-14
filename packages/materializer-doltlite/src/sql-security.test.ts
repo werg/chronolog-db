@@ -1,8 +1,9 @@
 import { DatabaseSync } from '@dolthub/doltlite'
 import { describe, expect, it } from 'vitest'
 
+import type {
+  SqlProfileError} from './sql-profile.js';
 import {
-  SqlProfileError,
   assertNativeSecurityConfiguration,
   configureSqliteLimits,
   isOperationalSqliteError,

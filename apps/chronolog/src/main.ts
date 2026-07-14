@@ -264,7 +264,7 @@ function stringArray(value: unknown): readonly string[] {
   if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) {
     throw new Error('Parameter names must be a JSON string array')
   }
-  return value
+  return value as readonly string[]
 }
 
 function labelOptions(label: string | undefined): { readonly applicationLabel?: string } {

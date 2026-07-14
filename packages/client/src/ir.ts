@@ -184,9 +184,9 @@ export function decodeLogicalValue(value: LogicalValue): DecodedLogicalValue {
     case 'decimal': return decimalFromParts(value.coefficient, value.scale)
     case 'text': return decodeUtf8(value.utf8)
     case 'blob': return Uint8Array.from(value.bytes)
-    case 'uuid': return Uint8Array.from(value.bytes) as Uuid
-    case 'timestamp_ms': return value.value as TimestampMs
-    case 'duration_ms': return value.value as DurationMs
+    case 'uuid': return Uint8Array.from(value.bytes)
+    case 'timestamp_ms': return value.value
+    case 'duration_ms': return value.value
     case 'json': return jsonWrapper(value.value)
     case 'vector': return decodeVector(value.element, value.dimensions, value.bytes)
   }
@@ -200,9 +200,9 @@ export function decodeDisplayValue(value: DisplayValue): DecodedLogicalValue {
     case 'decimal': return decimalFromParts(BigInt(value.coefficient), value.scale)
     case 'text': return value.value
     case 'blob': return fromBase64Url(value.value)
-    case 'uuid': return fromBase64Url(value.value) as Uuid
-    case 'timestamp_ms': return BigInt(value.value) as TimestampMs
-    case 'duration_ms': return BigInt(value.value) as DurationMs
+    case 'uuid': return fromBase64Url(value.value)
+    case 'timestamp_ms': return BigInt(value.value)
+    case 'duration_ms': return BigInt(value.value)
     case 'json': {
       const canonicalJson = value.canonicalJson
       return Object.freeze({ canonicalJson, decode: () => deepFreeze(JSON.parse(canonicalJson) as unknown) })
@@ -265,9 +265,10 @@ function canonicalJsonText(value: IrCanonicalJsonValue): string {
   if (typeof value === 'boolean') return value ? 'true' : 'false'
   if (typeof value === 'bigint') return value.toString(10)
   if (typeof value === 'string') return JSON.stringify(value)
-  if (Array.isArray(value)) return `[${value.map(canonicalJsonText).join(',')}]`
+  if (Array.isArray(value)) return `[${(value as readonly IrCanonicalJsonValue[]).map(canonicalJsonText).join(',')}]`
   if (value instanceof Map) {
-    return `{${[...value.entries()].map(([key, item]) => `${JSON.stringify(key)}:${canonicalJsonText(item)}`).join(',')}}`
+    const entries = value as ReadonlyMap<string, IrCanonicalJsonValue>
+    return `{${[...entries].map(([key, item]) => `${JSON.stringify(key)}:${canonicalJsonText(item)}`).join(',')}}`
   }
   const decimal = value as { readonly coefficient: bigint; readonly scale: number }
   return decimalFromParts(decimal.coefficient, decimal.scale).toString()
@@ -275,9 +276,10 @@ function canonicalJsonText(value: IrCanonicalJsonValue): string {
 
 function immutableCanonicalJson(value: IrCanonicalJsonValue): unknown {
   if (value === null || typeof value !== 'object') return value
-  if (Array.isArray(value)) return Object.freeze(value.map(immutableCanonicalJson))
+  if (Array.isArray(value)) return Object.freeze((value as readonly IrCanonicalJsonValue[]).map(immutableCanonicalJson))
   if (value instanceof Map) {
-    return Object.freeze(Object.fromEntries([...value].map(([key, item]) => [key, immutableCanonicalJson(item)])))
+    const entries = value as ReadonlyMap<string, IrCanonicalJsonValue>
+    return Object.freeze(Object.fromEntries([...entries].map(([key, item]) => [key, immutableCanonicalJson(item)])))
   }
   const decimal = value as { readonly coefficient: bigint; readonly scale: number }
   return decimalFromParts(decimal.coefficient, decimal.scale)

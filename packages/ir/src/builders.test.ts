@@ -150,7 +150,7 @@ describe('IrBuilder mutations and preconditions', () => {
   })
 })
 
-function scalar(builder: IrBuilder, value: ReturnType<typeof values.int64> | ReturnType<typeof values.boolean>, name: string): Query
+function scalar(builder: IrBuilder, value: ReturnType<typeof values.int64>  , name: string): Query
 function scalar(builder: IrBuilder, value: Parameters<IrBuilder['literal']>[0], name: string): Query
 function scalar(builder: IrBuilder, value: Parameters<IrBuilder['literal']>[0], name: string): Query {
   return builder.query([builder.projection(name, builder.literal(value))], { resultMode: resultModes.scalar() })

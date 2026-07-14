@@ -9,7 +9,7 @@ import {
   encodeTransactionProgram, logicalTypes, portableExecutionManifestFixture,
   portableSchemaManifestFixture, portableTransactionProgramFixture, queryFromCanonicalCbor,
   queryToCanonicalCbor, transactionLogQueryFixture, validateQuery, validateTransactionProgram, values,
-  type Query, type TransactionProgram,
+  type Query,
 } from './index.js'
 
 describe('logical values and canonical JSON', () => {
@@ -57,7 +57,7 @@ describe('IR codecs and validation', () => {
     const valid = portableTransactionProgramFixture()
     expect(validateTransactionProgram({ ...valid, preconditions: [] }).diagnostics.map((item) => item.code)).toContain('PRECONDITION_REQUIRED')
     expect(validateTransactionProgram({ ...valid, mutations: [] }).diagnostics.map((item) => item.code)).toContain('MUTATION_REQUIRED')
-    const parameterized = structuredClone(valid) as TransactionProgram
+    const parameterized = structuredClone(valid)
     const query = parameterized.preconditions[0]!.query
     ;(query.projection[0]! as { expression: unknown }).expression = { kind: 'parameter', id: 4, name: 'answer', valueType: { logical: { kind: 'int64' }, nullable: false } }
     expect(validateTransactionProgram(parameterized).diagnostics.map((item) => item.code)).toContain('DRAFT_PARAMETER_UNSUBSTITUTED')

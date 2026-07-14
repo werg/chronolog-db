@@ -80,8 +80,8 @@ export interface MutationOptions {
 export interface InsertOptions extends MutationOptions { readonly conflict?: ConflictPolicy }
 export interface UpdateOptions extends MutationOptions { readonly where?: Expr }
 export interface DeleteOptions extends MutationOptions { readonly where?: Expr }
-export interface UpsertOptions extends MutationOptions {}
-export interface MergeOptions extends MutationOptions {}
+export type UpsertOptions = MutationOptions
+export type MergeOptions = MutationOptions
 
 export class IrBuilder {
   private nextId: number
@@ -103,7 +103,7 @@ export class IrBuilder {
   exists(query: Query, negated = false): Expr { return immutable({ kind: 'exists', id: this.id(), query, negated }) }
   membership(value: Expr, members: readonly Expr[] | Query, negated = false): Expr {
     return immutable(Array.isArray(members)
-      ? { kind: 'membership', id: this.id(), value, values: [...members], negated }
+      ? { kind: 'membership', id: this.id(), value, values: [...members as readonly Expr[]], negated }
       : { kind: 'membership', id: this.id(), value, query: members as Query, negated })
   }
   entropy(label: string, index: number, length: number): Expr { return immutable({ kind: 'entropy', id: this.id(), label, index, length }) }

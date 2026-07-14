@@ -1,6 +1,6 @@
 import type { ExecutionManifest, Query } from '@chronolog/ir'
 
-import { Catalog } from './catalog.js'
+import type { Catalog } from './catalog.js'
 import { SqlRenderer } from './render.js'
 import type { CompiledQuery } from './types.js'
 import { CompilerError } from './types.js'

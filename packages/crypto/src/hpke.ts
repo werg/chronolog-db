@@ -13,7 +13,7 @@ const HASH_SIZE = 32
 const X25519: AlgorithmIdentifier = { name: 'X25519' }
 
 function source(value: Uint8Array): ArrayBuffer {
-  return value.slice().buffer as ArrayBuffer
+  return value.slice().buffer
 }
 
 function i2osp(value: number, length: number): Uint8Array {

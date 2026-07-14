@@ -4,7 +4,7 @@ import { CanonicalError, canonicalInvariant } from './errors.js'
 export type IntegerMap = ReadonlyMap<CborMapKey, CborValue>
 export function integerMap(entries: readonly (readonly [number, CborValue | undefined])[]): IntegerMap { const map = new Map<CborMapKey, CborValue>(); for (const [key, value] of entries) if (value !== undefined) map.set(BigInt(key), value); return map }
 export function expectMap(value: CborValue, name: string): IntegerMap { canonicalInvariant(value instanceof Map, 'SCHEMA_INVALID', `${name} must be a map`); return value }
-export function expectArray(value: CborValue, name: string): readonly CborValue[] { canonicalInvariant(Array.isArray(value), 'SCHEMA_INVALID', `${name} must be an array`); return value }
+export function expectArray(value: CborValue, name: string): readonly CborValue[] { canonicalInvariant(Array.isArray(value), 'SCHEMA_INVALID', `${name} must be an array`); return value as readonly CborValue[] }
 export function expectBytes(value: CborValue, name: string, length?: number): Uint8Array { canonicalInvariant(value instanceof Uint8Array, 'SCHEMA_INVALID', `${name} must be bytes`); if (length !== undefined) canonicalInvariant(value.length === length, 'SCHEMA_INVALID', `${name} must contain ${length} bytes`); return Uint8Array.from(value) }
 export function expectString(value: CborValue, name: string): string { canonicalInvariant(typeof value === 'string', 'SCHEMA_INVALID', `${name} must be text`); return value }
 export function expectBoolean(value: CborValue, name: string): boolean { canonicalInvariant(typeof value === 'boolean', 'SCHEMA_INVALID', `${name} must be boolean`); return value }

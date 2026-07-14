@@ -99,7 +99,7 @@ export function readSystemLog(database: DatabaseLike): TransactionLogRow[] {
       canonicalCandidate: asBytes(raw.canonical_candidate),
       orderKey: { authorTimestampMs, authorId, authorFeedSequence, txId },
       outcome,
-      rejectionCode: raw.rejection_code === null ? null : String(raw.rejection_code),
+      rejectionCode: raw.rejection_code === null ? null : asString(raw.rejection_code),
       failingPreconditionId: asNullableId(raw.failing_precondition_id),
       failingCommandId: asNullableId(raw.failing_command_id),
       failingRuleId: asNullableId(raw.failing_rule_id),
@@ -164,6 +164,11 @@ function asDigest(value: unknown): Uint8Array {
   const bytes = asBytes(value)
   if (bytes.length !== 32) throw new Error('MATERIALIZER_CORRUPT_DIGEST')
   return bytes
+}
+
+function asString(value: unknown): string {
+  if (typeof value !== 'string') throw new Error('MATERIALIZER_CORRUPT_TEXT')
+  return value
 }
 
 function asNullableId(value: unknown): number | null {

@@ -7,7 +7,7 @@
     "apps/**/*.ts",
     "packages/**/*.ts",
     "examples/**/*.ts",
+    "test/**/*.ts",
     "vitest.config.ts"
   ]
 }
-

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
+import type {
+  ProtocolError} from './index.js';
 import {
-  ProtocolError,
   assertCanonicalCbor,
   decodeCanonicalCbor,
   encodeCanonicalCbor,

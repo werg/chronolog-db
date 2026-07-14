@@ -1,9 +1,10 @@
 import { encodeCanonicalCbor, integerMap } from '@chronolog/canonical'
-import { type TransactionProgram } from '@chronolog/ir'
+import type { TransactionProgram } from '@chronolog/ir'
 import { describe, expect, it } from 'vitest'
 
-import {
-  ProtocolError, compareTransactionOrder, createPayloadManifest, decodeEnvelope,
+import type {
+  ProtocolError} from './index.js';
+import { compareTransactionOrder, createPayloadManifest, decodeEnvelope,
   decodeTransactionCore, decodeValidatorAttestation, encodeEnvelope, encodeTransactionCore,
   encodeValidatorAttestation, payloadDigest, resolveEnvelopePayload, transactionDigest,
   transactionOrderKey, type ChronologEnvelope, type TransactionCore, type ValidatorAttestation,

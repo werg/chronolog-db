@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import {
-  DOMAINS,
   generateEd25519KeyPair,
 } from '@chronolog/protocol'
 import {
@@ -53,7 +52,7 @@ async function fixture() {
   const manifest: GenesisManifest = {
     groupId: bytes(1), schemaId: bytes(2), rootAdminPublicKey: root.publicKeyBytes,
     capabilityLogFeed: bytes(3),
-    recoveryPublicKeys: [recovery[0]!.publicKeyBytes, recovery[1]!.publicKeyBytes, recovery[2]!.publicKeyBytes],
+    recoveryPublicKeys: [recovery[0].publicKeyBytes, recovery[1].publicKeyBytes, recovery[2].publicKeyBytes],
     recoveryThreshold: 2n,
     initialCapabilities: [writer, initialValidator], validationPolicies: [policy],
     clockPolicy: { maxFutureSkewMs: 60_000n, cutoffLagMs: 300_000n, heartbeatIntervalMs: 30_000n },
@@ -147,9 +146,9 @@ describe('offline recovery', () => {
       newRevision: 1n, newRootPublicKey: newRoot.publicKeyBytes, newCapabilityLogFeed: bytes(9),
       validatorGrants: [validator(30, 1n, 10n, 'R')], reopenHistory: true, reopeningReason: 'lost validator quorum',
     } as const
-    const one = await signRecoveryPayload(payload, 0n, f.recovery[0]!.privateKey)
+    const one = await signRecoveryPayload(payload, 0n, f.recovery[0].privateKey)
     expect(await verifyRecoveryRecord(state, combineRecoverySignatures(payload, [one]))).toBe(false)
-    const two = await signRecoveryPayload(payload, 2n, f.recovery[2]!.privateKey)
+    const two = await signRecoveryPayload(payload, 2n, f.recovery[2].privateKey)
     const record = combineRecoverySignatures(payload, [two, one, one])
     const roundTripped = decodeRecoveryRecord(encodeRecoveryRecord(record))
     expect(await verifyRecoveryRecord(state, roundTripped)).toBe(true)

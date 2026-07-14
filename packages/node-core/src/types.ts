@@ -1,11 +1,9 @@
 import type { ControlStore, StoredAttestation, WatermarkPolicy } from '@chronolog/control-store'
 import type {
-  AdmittedTransaction,
   DeterministicMaterializer,
   LocalSqlQueryResult,
   LocalSqlValue,
   MaterializedIrQueryResult,
-  TransactionOutcome,
 } from '@chronolog/materializer-doltlite'
 import type { Query, TransactionProgram } from '@chronolog/ir'
 import type {
@@ -112,6 +110,8 @@ export interface NodeStatus {
   readonly eventSetRevision: bigint
   readonly candidates: number
   readonly admitted: number
+  readonly processedTransportRecords: number
+  readonly materializationPending: boolean
   readonly materializedRevision: bigint
   readonly orderLength: number
   readonly schemaDigest: Uint8Array

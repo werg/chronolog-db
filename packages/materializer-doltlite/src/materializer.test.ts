@@ -13,7 +13,6 @@ import {
   type Precondition,
   type Query,
   type SchemaManifest,
-  type TransactionProgram,
 } from '@chronolog/ir'
 import { encodeTransactionCore, transactionDigest, type TransactionCore } from '@chronolog/protocol'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -254,6 +253,44 @@ describe('DeterministicMaterializer IR reducer', () => {
     expect(event?.outcomeChanges).toContainEqual(expect.objectContaining({
       txId: later.txId, previous: 'accepted', current: 'rejected_precondition',
     }))
+    materializer.close()
+  })
+
+  it('records a replay rejection without restoring stale later log rows', async () => {
+    const materializer = await open(temporaryPath(), 5)
+    const first = await transaction(1, 10n, [setBalance(100, 90n)], [expectBalance(200, 100n)])
+    const displaced = await transaction(3, 30n, [setBalance(300, 80n)], [expectBalance(400, 90n)])
+    const trailing = await transaction(4, 40n, [setBalance(500, 70n)])
+    await materializer.materialize([first, displaced, trailing])
+
+    const predecessor = await transaction(2, 20n, [setBalance(600, 5n)])
+    await materializer.materialize([first, predecessor, displaced, trailing])
+
+    expect(materializer.transactionLog().map((row) => row.orderIndex)).toEqual([0, 1, 2, 3])
+    expect(materializer.outcome(displaced.txId)).toMatchObject({
+      outcome: 'rejected_precondition',
+      rejectionCode: 'EXPECTATION_MISMATCH',
+    })
+    materializer.close()
+  })
+
+  it('repeatedly replays checkpointed history as late predecessors arrive', async () => {
+    const materializer = await open(temporaryPath(), 5)
+    const arrivalTimestamps = [
+      20, 35, 10, 40, 30, 5, 25, 15, 38, 2,
+      33, 8, 28, 18, 37, 1, 22, 12, 32, 7,
+    ]
+    const admitted: AdmittedTransaction[] = []
+    for (let index = 0; index < arrivalTimestamps.length; index += 1) {
+      const timestamp = arrivalTimestamps[index]!
+      admitted.push(await transaction(index + 1, BigInt(timestamp), [setBalance(10_000 + index * 10, BigInt(timestamp))]))
+      admitted.sort((left, right) => Number(left.core.authorTimestampMs - right.core.authorTimestampMs))
+      await materializer.materialize(admitted)
+      expect(materializer.orderLength).toBe(admitted.length)
+    }
+    expect(materializer.transactionLog().map((row) => Number(row.authorTimestampMs))).toEqual(
+      [...arrivalTimestamps].sort((left, right) => left - right),
+    )
     materializer.close()
   })
 

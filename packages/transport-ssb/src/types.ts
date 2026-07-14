@@ -16,6 +16,18 @@ export interface TransportStatus {
   readonly records: number
   readonly closed: boolean
   readonly peers: readonly string[]
+  readonly configuredPeers?: readonly {
+    readonly feedId: string
+    readonly address: string
+    readonly connected: boolean
+    readonly attempts: number
+    readonly lastError?: string
+    readonly lastProgressAt?: number
+    readonly maximumSequence?: string
+  }[]
+  readonly lastCatchUpError?: string
+  /** True when derived SSB indexes were rebuilt after an unclean prior exit. */
+  readonly recoveredAfterUncleanClose?: boolean
 }
 
 export interface ChronologTransport {

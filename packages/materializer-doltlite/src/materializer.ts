@@ -350,6 +350,7 @@ export class DeterministicMaterializer implements MaterializerIrBackend {
       verifyReplayBase(readSystemLog(this.#writer), transactions, replayFrom)
 
       for (let index = replayFrom; index < transactions.length; index += 1) {
+        verifyNextLogIndex(this.#writer, index)
         await this.#applyTransaction(transactions[index]!, index)
       }
 
@@ -448,6 +449,7 @@ export class DeterministicMaterializer implements MaterializerIrBackend {
 
   async #applyTransaction(transaction: AdmittedTransaction, orderIndex: number): Promise<void> {
     this.#writer.exec('BEGIN IMMEDIATE')
+    this.#writer.exec('SAVEPOINT chronolog_program')
     try {
       if (!bytesEqual(transaction.core.schemaDigest, this.#artifacts.schemaDigest)) {
         throw new DeterministicIrRejection('SCHEMA_DIGEST_MISMATCH')
@@ -473,37 +475,38 @@ export class DeterministicMaterializer implements MaterializerIrBackend {
       }
       const resultDigest = acceptedResultDigest(preconditionDigests, affectedRows)
       insertSystemLogRow(this.#writer, logRow(transaction, orderIndex, 'accepted', null, { resultDigest }))
+      this.#writer.exec('RELEASE SAVEPOINT chronolog_program')
       this.#writer.exec('COMMIT')
     } catch (error) {
-      rollbackIfActive(this.#writer)
       const rejection = deterministicRejection(error)
       if (rejection === null) {
+        rollbackIfActive(this.#writer)
         if (isOperationalSqliteError(error)) throw error
         throw error
       }
-      this.#writeRejectedOutcome(transaction, orderIndex, rejection)
-    }
-  }
-
-  #writeRejectedOutcome(
-    transaction: AdmittedTransaction,
-    orderIndex: number,
-    rejection: Rejection,
-  ): void {
-    if (this.#writer.inTransaction) throw new Error('MATERIALIZER_REJECTION_TRANSACTION_STILL_ACTIVE')
-    this.#writer.exec('BEGIN IMMEDIATE')
-    try {
-      insertSystemLogRow(this.#writer, logRow(
-        transaction,
-        orderIndex,
-        rejection.failingPreconditionId === null ? 'rejected_execution' : 'rejected_precondition',
-        rejection.code,
-        rejection,
-      ))
-      this.#writer.exec('COMMIT')
-    } catch (error) {
-      rollbackIfActive(this.#writer)
-      throw error
+      try {
+        // Keep rejection recording in the same outer transaction. A full
+        // ROLLBACK after checking out a replay branch can restore DoltLite's
+        // previous branch working set, resurrecting later protected-log rows.
+        // The savepoint rolls back every application mutation while preserving
+        // the selected replay base and lets us commit the rejection atomically.
+        this.#writer.exec('ROLLBACK TO SAVEPOINT chronolog_program')
+        this.#writer.exec('RELEASE SAVEPOINT chronolog_program')
+        insertSystemLogRow(this.#writer, logRow(
+          transaction,
+          orderIndex,
+          rejection.failingPreconditionId === null ? 'rejected_execution' : 'rejected_precondition',
+          rejection.code,
+          rejection,
+        ))
+        this.#writer.exec('COMMIT')
+      } catch (writeError) {
+        rollbackIfActive(this.#writer)
+        throw new Error(
+          `MATERIALIZER_REJECTION_WRITE_FAILED:${errorMessage(error)}:${errorMessage(writeError)}`,
+          { cause: writeError },
+        )
+      }
     }
   }
 
@@ -643,7 +646,7 @@ function validateCheckpointRefs(
       removeBranchIfPresent(database, checkpoint.branchRef)
       continue
     }
-    let matches = false
+    let matches: boolean
     try {
       database.doltCheckout(checkpoint.branchRef)
       verifyStoredManifest(readExecutionManifest(database), artifacts)
@@ -718,6 +721,19 @@ function verifyReplayBase(
   if (baseLog.length !== prefixLength) throw new Error('MATERIALIZER_CHECKPOINT_PREFIX_LENGTH_MISMATCH')
   for (let index = 0; index < prefixLength; index += 1) {
     if (!sameIdentity(baseLog[index]!, transactions[index]!)) throw new Error('MATERIALIZER_CHECKPOINT_PREFIX_MISMATCH')
+  }
+}
+
+function verifyNextLogIndex(database: DatabaseLike, expectedIndex: number): void {
+  const row = database.prepare(`
+    SELECT count(*) AS row_count, max(order_index) AS maximum_index
+      FROM chronolog_transactions
+  `).get()
+  if (row === undefined || Array.isArray(row)) throw new Error('MATERIALIZER_REPLAY_LOG_STATE_UNAVAILABLE')
+  const count = Number(row.row_count)
+  const maximum = row.maximum_index === null ? -1 : Number(row.maximum_index)
+  if (count !== expectedIndex || maximum !== expectedIndex - 1) {
+    throw new Error(`MATERIALIZER_REPLAY_LOG_DRIFT:${expectedIndex}:${count}:${maximum}`)
   }
 }
 
@@ -901,6 +917,7 @@ function validatePositiveInteger(value: number, name: string): number {
   return value
 }
 function nonThrowingDiagnostic(error: unknown, fallback: string): string { return error instanceof Error && error.message.length > 0 ? error.message : fallback }
+function errorMessage(error: unknown): string { return error instanceof Error ? error.message : String(error) }
 function resetActiveWorkingSet(database: DatabaseLike): void {
   const active = database.doltActiveBranch()
   const branch = database.doltBranches().find((entry) => entry.name === active)

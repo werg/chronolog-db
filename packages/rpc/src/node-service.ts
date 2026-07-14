@@ -19,7 +19,7 @@ import {
   type Query,
   type TransactionProgram,
 } from '@chronolog/ir'
-import { ChronologNode } from '@chronolog/node-core'
+import type { ChronologNode } from '@chronolog/node-core'
 
 import type { ChronologRpcService, RpcCallContext } from './contract.js'
 import { ChronologRpcError } from './errors.js'
@@ -331,7 +331,10 @@ export class NodeRpcService implements ChronologRpcService {
         diagnostics: [],
         labels: new Map(),
         expectationObservations: new Map(),
-        nextPreconditionId: 1,
+        // Preconditions are introduced by the RPC service around already
+        // canonical application IR. Allocate down from the safe-integer ceiling
+        // so ordinary monotonic code-generated query/mutation IDs cannot collide.
+        nextPreconditionId: Number.MAX_SAFE_INTEGER,
         draftRevision: 0n,
         cancelled: false,
       }
@@ -391,7 +394,7 @@ export class NodeRpcService implements ChronologRpcService {
     return this.#mutateDraft('assertionIr', request, context, (draft, backend) => {
       const query = decodeAndBindQuery(request.queryIr, request.parameters, request.parameterNames)
       const diagnostics = mapDiagnostics(backend.validateQuery(query), request.applicationLabel)
-      const id = draft.nextPreconditionId++
+      const id = draft.nextPreconditionId--
       if (request.applicationLabel !== undefined) draft.labels.set(`p:${id}`, request.applicationLabel)
       draft.preconditions.push({ kind: 'assert', id, query, unknownIsFailure: true })
       return diagnostics
@@ -415,7 +418,7 @@ export class NodeRpcService implements ChronologRpcService {
         query = decodeAndBindQuery(source.queryIr, source.parameters, source.parameterNames)
         result = decodeCanonical('canonical query result', () => decodeCanonicalQueryResult(fromBase64Url(source.canonicalResult)))
       }
-      const id = draft.nextPreconditionId++
+      const id = draft.nextPreconditionId--
       if (observationId !== undefined) draft.expectationObservations.set(id, observationId)
       if (request.applicationLabel !== undefined) draft.labels.set(`p:${id}`, request.applicationLabel)
       draft.preconditions.push({ kind: 'expect', id, query, expected: { kind: 'inline', result } })
@@ -677,14 +680,24 @@ export class NodeRpcService implements ChronologRpcService {
   async getReplicationStatus(request: GetReplicationStatusRequest, _context: RpcCallContext): Promise<ReplicationStatus> {
     this.#assertGroup(request.groupId)
     const status = await this.#node.status()
+    const knownPeers = status.transport.configuredPeers?.length ?? status.transport.peers.length
+    const ingestionBacklog = Math.max(0, status.transport.records - status.processedTransportRecords)
+    const routineHeartbeatTail = Math.max(4, knownPeers * 2)
+    const pendingPayloads = this.#node.controlStore.listCandidates().filter((candidate) => candidate.state === 'waiting_for_payload').length
     return {
       groupId: this.#groupId(),
       revision: this.#node.revision.toString(10),
       connectedPeers: status.transport.peers.length,
-      knownPeers: status.transport.peers.length,
+      knownPeers,
       feedsWithGaps: 0,
-      pendingPayloads: this.#node.controlStore.listCandidates().filter((candidate) => candidate.state === 'waiting_for_payload').length,
-      state: status.lastError === undefined ? status.transport.peers.length > 0 ? 'current' : 'offline' : 'degraded',
+      pendingPayloads,
+      ingestionBacklog,
+      materializationPending: status.materializationPending,
+      state: status.lastError === undefined
+        ? ingestionBacklog > routineHeartbeatTail || pendingPayloads > 0 || status.materializationPending
+          ? 'syncing'
+          : knownPeers === 0 || status.transport.peers.length > 0 ? 'current' : 'offline'
+        : 'degraded',
     }
   }
 
@@ -890,8 +903,7 @@ async function publishProgram(
   node: ChronologNode,
   input: { readonly program: TransactionProgram; readonly authorTimestampMs: bigint; readonly nonce: Uint8Array },
 ): Promise<PublishedProgram> {
-  const publish = node.publish as unknown as (value: typeof input) => Promise<PublishedProgram>
-  return publish.call(node, { ...input, nonce: Uint8Array.from(input.nonce) })
+  return node.publish({ ...input, nonce: Uint8Array.from(input.nonce) })
 }
 
 function nodeIrBackend(node: ChronologNode): NodeRpcIrBackend {

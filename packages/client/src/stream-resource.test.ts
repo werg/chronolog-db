@@ -12,6 +12,15 @@ async function waitFor(predicate: () => boolean): Promise<void> {
 }
 
 describe('StreamResource retry lifecycle', () => {
+  it('notifies an owner exactly once when disposed', () => {
+    const resource = new StreamResource<number>({ open: async function* () {}, cursor: String })
+    let disposals = 0
+    resource.onDispose(() => { disposals += 1 })
+    resource.dispose()
+    resource.dispose()
+    expect(disposals).toBe(1)
+  })
+
   it('latches non-retryable errors until explicitly restarted', async () => {
     let opens = 0
     const resource = new StreamResource<string>({

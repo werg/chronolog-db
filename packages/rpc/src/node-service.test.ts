@@ -406,6 +406,8 @@ describe('NodeRpcService canonical drafts', () => {
       requestId: 'attribution-publish',
       idempotencyKey: 'attribution',
     }, context)
+    const publishedProgram = (node.publish.mock.calls[0]?.[0] as { program: { preconditions: readonly { id: number }[] } }).program
+    const preconditionId = publishedProgram.preconditions[0]!.id
     node.candidateValue = {
       state: 'admissible',
       orderKey: {
@@ -418,7 +420,7 @@ describe('NodeRpcService canonical drafts', () => {
     node.outcomeValue = {
       outcome: 'rejected_precondition',
       rejectionCode: 'PRECONDITION_FALSE',
-      failingPreconditionId: 1,
+      failingPreconditionId: preconditionId,
       failingCommandId: null,
       failingRuleId: null,
       failingConstraintId: null,
@@ -432,7 +434,7 @@ describe('NodeRpcService canonical drafts', () => {
       type: 'rejected',
       attribution: {
         code: 'PRECONDITION_FALSE',
-        preconditionId: 1,
+        preconditionId,
         applicationLabel: 'balance-still-current',
       },
       message: 'PRECONDITION_FALSE',

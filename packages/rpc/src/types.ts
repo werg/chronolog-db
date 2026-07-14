@@ -412,6 +412,10 @@ export interface ReplicationStatus {
   readonly knownPeers: number
   readonly feedsWithGaps: number
   readonly pendingPayloads: number
+  /** Durable transport records waiting to be reduced into the control store. */
+  readonly ingestionBacklog: number
+  /** True while the authoritative admitted order is ahead of DoltLite. */
+  readonly materializationPending: boolean
   readonly state: ReplicationState
 }
 

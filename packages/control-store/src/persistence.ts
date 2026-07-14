@@ -55,12 +55,15 @@ export class MemoryControlStorePersistence implements ControlStorePersistence {
 /** A small crash-safe snapshot persistence for the rebuildable control index. */
 export class JsonFileControlStorePersistence implements ControlStorePersistence {
   readonly #path: string
+  #pendingSnapshot: (() => ControlStoreSnapshot) | null = null
+  #saveTimer: ReturnType<typeof setTimeout> | undefined
 
   constructor(path: string) {
     this.#path = path
   }
 
   load(): ControlStoreSnapshot | null {
+    this.flush()
     try {
       return decodeControlStoreSnapshot(readFileSync(this.#path, 'utf8'))
     } catch (error) {
@@ -70,6 +73,30 @@ export class JsonFileControlStorePersistence implements ControlStorePersistence 
   }
 
   save(snapshot: ControlStoreSnapshot): void {
+    this.#write(snapshot)
+  }
+
+  requestSave(snapshot: () => ControlStoreSnapshot): void {
+    this.#pendingSnapshot = snapshot
+    if (this.#saveTimer !== undefined) return
+    this.#saveTimer = setTimeout(() => {
+      this.#saveTimer = undefined
+      this.flush()
+    }, 100)
+    this.#saveTimer.unref?.()
+  }
+
+  flush(): void {
+    if (this.#saveTimer !== undefined) {
+      clearTimeout(this.#saveTimer)
+      this.#saveTimer = undefined
+    }
+    const snapshot = this.#pendingSnapshot
+    this.#pendingSnapshot = null
+    if (snapshot !== null) this.#write(snapshot())
+  }
+
+  #write(snapshot: ControlStoreSnapshot): void {
     mkdirSync(dirname(this.#path), { recursive: true })
     const temporaryPath = `${this.#path}.tmp`
     writeFileSync(temporaryPath, encodeControlStoreSnapshot(snapshot), {

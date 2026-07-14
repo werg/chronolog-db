@@ -169,6 +169,13 @@ export class TransactionHandle {
   }
 
   get transactionId(): string { return this.publication.transactionId }
+
+  dispose(): void {
+    this.outcome.dispose()
+    this.evidence.dispose()
+  }
+
+  [Symbol.dispose](): void { this.dispose() }
 }
 
 export class TransactionDraft {
@@ -346,7 +353,7 @@ export class TransactionDraft {
 
   async _flushAndValidate(): Promise<void> {
     await this.#tail
-    if (this.#failed !== undefined) throw this.#failed
+    if (this.#failed !== undefined) throw errorFromUnknown(this.#failed)
     if (this.#preconditionCount === 0) throw new TypeError('Every transaction requires a precondition')
     if (this.#mutationCount === 0) throw new TypeError('Every transaction requires a mutation')
     const diagnostics = await this.validate()
@@ -361,7 +368,7 @@ export class TransactionDraft {
 
   #enqueueResult<T>(operation: () => Promise<T>): Promise<T> {
     const result = this.#tail.then(async () => {
-      if (this.#failed !== undefined) throw this.#failed
+      if (this.#failed !== undefined) throw errorFromUnknown(this.#failed)
       return operation()
     })
     this.#tail = result.then(
@@ -661,6 +668,7 @@ export class ChronologClient {
 
   #track<T>(resource: StreamResource<T>): StreamResource<T> {
     this.#resources.add(resource)
+    resource.onDispose(() => this.#resources.delete(resource))
     return resource
   }
 
@@ -674,6 +682,10 @@ export class ChronologClient {
 
 async function* mapAsync<A, B>(source: AsyncIterable<A>, map: (value: A) => B): AsyncIterable<B> {
   for await (const value of source) yield map(value)
+}
+
+function errorFromUnknown(value: unknown): Error {
+  return value instanceof Error ? value : new Error('Queued draft operation failed', { cause: value })
 }
 
 function delay(milliseconds: number, signal?: AbortSignal): Promise<void> {

@@ -173,15 +173,19 @@ describe('ControlStore', () => {
     expect(restored.changesSince(0n).length).toBe(first.changesSince(0n).length)
   })
 
-  it('rejects conflicting duplicate identities and regressing cutoffs', () => {
+  it('rejects conflicting duplicate identities and later regressing cutoffs', () => {
     const store = new ControlStore()
     store.putCandidate(candidate(1, 1n))
     expect(() => store.putCandidate(candidate(1, 2n))).toThrowError(
       'CONTROL_STORE_CANDIDATE_CONFLICT',
     )
     store.recordHeartbeat(heartbeat(1, 100n))
-    expect(() => store.recordHeartbeat(heartbeat(1, 99n))).toThrowError(
-      'CONTROL_STORE_HEARTBEAT_SEQUENCE_REGRESSION',
+    expect(store.recordHeartbeat(heartbeat(1, 99n))).toBeNull()
+    expect(() => store.recordHeartbeat({
+      ...heartbeat(1, 99n),
+      validatorFeedSequence: 101n,
+    })).toThrowError(
+      'CONTROL_STORE_HEARTBEAT_CUTOFF_REGRESSION',
     )
   })
 })

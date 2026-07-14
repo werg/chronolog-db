@@ -57,6 +57,11 @@ export class ControlStore {
     return this.#sequence
   }
 
+  /** Flushes a coalesced rebuildable snapshot at graceful durability points. */
+  flush(): void {
+    this.#persistence?.flush?.()
+  }
+
   putCandidate(input: PutCandidateInput): { added: boolean; deltas: readonly ControlStoreDelta[] } {
     const txKey = idKey(input.txId)
     const existing = this.#candidates.get(txKey)
@@ -222,7 +227,10 @@ export class ControlStore {
     const previous = this.#heartbeats.get(validatorKey)
     if (previous !== undefined) {
       if (heartbeat.validatorFeedSequence < previous.validatorFeedSequence) {
-        throw new ControlStoreConflictError('CONTROL_STORE_HEARTBEAT_SEQUENCE_REGRESSION')
+        // A persisted control snapshot may already contain a later heartbeat
+        // when the authenticated transport history is replayed from sequence
+        // one after restart. Older feed records are superseded, not conflicts.
+        return null
       }
       if (heartbeat.acceptanceCutoffMs < previous.acceptanceCutoffMs) {
         throw new ControlStoreConflictError('CONTROL_STORE_HEARTBEAT_CUTOFF_REGRESSION')
@@ -494,7 +502,7 @@ export class ControlStore {
 
   #appendDelta(delta: WithoutSequence<ControlStoreDelta>): ControlStoreDelta {
     this.#sequence += 1n
-    const sequenced = clone({ ...delta, sequence: this.#sequence } as ControlStoreDelta)
+    const sequenced = clone({ ...delta, sequence: this.#sequence })
     this.#deltas.push(sequenced)
     return sequenced
   }
@@ -506,7 +514,11 @@ export class ControlStore {
   }
 
   #persist(): void {
-    this.#persistence?.save(this.snapshot())
+    if (this.#persistence?.requestSave !== undefined) {
+      this.#persistence.requestSave(() => this.snapshot())
+    } else {
+      this.#persistence?.save(this.snapshot())
+    }
   }
 
   #restore(snapshot: ControlStoreSnapshot): void {

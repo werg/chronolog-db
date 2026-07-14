@@ -44,7 +44,8 @@
       "sodium-native"
     ],
     "patchedDependencies": {
-      "@dolthub/doltlite@0.11.29": "patches/@dolthub__doltlite@0.11.29.patch"
+      "@dolthub/doltlite@0.11.29": "patches/@dolthub__doltlite@0.11.29.patch",
+      "async-append-only-log@4.3.10": "patches/async-append-only-log@4.3.10.patch"
     }
   }
 }

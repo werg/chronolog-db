@@ -85,7 +85,7 @@ function service(overrides: Partial<ChronologRpcService>): ChronologRpcService {
     getValidatorWatermark: missing, getReplicationStatus: missing,
     streamReplicationStatus: missingStream,
     ...overrides,
-  } as ChronologRpcService
+  }
 }
 
 function clientFor(rpcService: ChronologRpcService): ChronologClient {
@@ -156,6 +156,7 @@ describe('ChronologClient canonical IR surface', () => {
     }, { atRevision: '5', idempotencyKey: 'payment-42' })
 
     expect(handle.transactionId).toBe('tx-1')
+    expect(() => handle.dispose()).not.toThrow()
     expect(calls.map((call) => call.split(':')[0])).toEqual([
       'begin', 'observe', 'expect', 'assert', 'mutation', 'validate', 'publish',
     ])

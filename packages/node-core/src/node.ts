@@ -16,7 +16,6 @@ import type {
   TransactionOutcome,
 } from '@chronolog/materializer-doltlite'
 import {
-  DOMAINS,
   decodeTransactionCore,
   decodeValidatorAttestation,
   decodeValidatorHeartbeat,
@@ -24,7 +23,6 @@ import {
   encodeValidatorAttestation,
   encodeValidatorHeartbeat,
   equalBytes,
-  hashDomain,
   transactionDigest,
   transactionOrderKey,
   utf8,
@@ -60,8 +58,11 @@ export class ChronologNode {
   #consumeTask: Promise<void> | null = null
   #lastError: Error | undefined
   #acceptedAboveMs: bigint
-  #lastHeartbeatAt = 0
   #heartbeatTimer: ReturnType<typeof setInterval> | undefined
+  #materializationDebounceTimer: ReturnType<typeof setTimeout> | undefined
+  #materializationRetryTimer: ReturnType<typeof setTimeout> | undefined
+  #materializationRetryMs = 100
+  #materializationPending = false
   #lastAuthoredTimestampMs = -1n
 
   constructor(options: ChronologNodeOptions) {
@@ -114,6 +115,20 @@ export class ChronologNode {
     const subscription = this.#options.transport.subscribe(this.#abort.signal)
     this.#consumeTask = this.#consume(subscription)
     await this.#drainHistory()
+    // The control store is authoritative and is committed before the derived
+    // DoltLite revision. A crash between those two writes can therefore leave
+    // an admissible order ahead of the materializer. Reconcile even when replay
+    // did not cause a new admission transition: restored candidates are already
+    // marked admissible, so their normal ingest path intentionally does nothing.
+    await this.#mutex.run(async () => {
+      this.#materializationPending = true
+      try {
+        await this.#reconcileMaterializer()
+      } catch (error) {
+        this.#recordError(error)
+        this.#scheduleMaterializationRetry()
+      }
+    })
     if (this.#options.validator?.heartbeatIntervalMs) {
       const interval = this.#options.validator.heartbeatIntervalMs
       this.#heartbeatTimer = setInterval(() => { void this.publishHeartbeat().catch((error) => this.#recordError(error)) }, interval)
@@ -180,7 +195,6 @@ export class ChronologNode {
     const payload = encodeValidatorHeartbeat(heartbeat)
     const envelope = await encodeSignedEnvelope(this.#groupRoute(), 'heartbeat', payload, this.#options.identity, this.#options.envelopeCipher)
     const record = await this.#options.transport.publish(envelope, { timestampMs: now })
-    this.#lastHeartbeatAt = now
     await this.ingest(record)
   }
 
@@ -196,6 +210,7 @@ export class ChronologNode {
       } catch (error) {
         this.#seen.add(record.id)
         this.#recordError(error)
+        this.#scheduleMaterializationRetry()
       }
     })
   }
@@ -276,6 +291,8 @@ export class ChronologNode {
       eventSetRevision: this.#revision,
       candidates: this.#control.listCandidates().length,
       admitted: this.#control.orderedTransactionIds().length,
+      processedTransportRecords: this.#seen.size,
+      materializationPending: this.#materializationPending,
       materializedRevision: this.#options.materializer.revision,
       orderLength: this.#options.materializer.orderLength,
       schemaDigest: this.schemaDigest,
@@ -297,7 +314,9 @@ export class ChronologNode {
   }
 
   async waitForIdle(): Promise<void> {
-    await this.#mutex.run(async () => {})
+    await this.#mutex.run(async () => {
+      if (this.#materializationPending) await this.#reconcileMaterializer()
+    })
   }
 
   async close(): Promise<void> {
@@ -305,7 +324,14 @@ export class ChronologNode {
     this.#closed = true
     this.#abort.abort()
     if (this.#heartbeatTimer) clearInterval(this.#heartbeatTimer)
+    if (this.#materializationDebounceTimer) clearTimeout(this.#materializationDebounceTimer)
+    if (this.#materializationRetryTimer) clearTimeout(this.#materializationRetryTimer)
     await this.#consumeTask?.catch(() => {})
+    await this.#mutex.run(async () => {
+      if (!this.#materializationPending) return
+      try { await this.#reconcileMaterializer() } catch (error) { this.#recordError(error) }
+    })
+    this.#control.flush()
     this.#events.close()
     this.#options.materializer.close()
     await this.#options.transport.close()
@@ -456,7 +482,8 @@ export class ChronologNode {
       this.#control.setCandidateState(txId, 'admissible', {
         proofAttestationIds: customSelection.map((item) => item.attestationId),
       })
-      await this.#materialize()
+      this.#materializationPending = true
+      this.#scheduleMaterialization()
       return
     }
     const eligible: StoredAttestation[] = []
@@ -478,7 +505,8 @@ export class ChronologNode {
     this.#control.setCandidateState(txId, 'admissible', {
       proofAttestationIds: eligible.slice(0, threshold).map((item) => item.attestationId),
     })
-    await this.#materialize()
+    this.#materializationPending = true
+    this.#scheduleMaterialization()
   }
 
   async #ingestHeartbeat(record: TransportRecord, encoded: Uint8Array, signer: Uint8Array): Promise<void> {
@@ -500,7 +528,8 @@ export class ChronologNode {
     if (recorded !== null) this.#emit('heartbeat')
   }
 
-  async #materialize(): Promise<void> {
+  async #reconcileMaterializer(): Promise<void> {
+    if (!this.#materializationPending) return
     const ordered: AdmittedTransaction[] = this.#control.orderedCandidates().map((candidate) => {
       const core = this.#candidateCores.get(this.#idKey(candidate.txId))
       if (!core || !candidate.canonicalPayload) throw new Error('ADMITTED_CANDIDATE_PAYLOAD_MISSING')
@@ -513,6 +542,16 @@ export class ChronologNode {
       }
     })
     const revision = await this.#options.materializer.materialize(ordered)
+    this.#materializationPending = false
+    this.#materializationRetryMs = 100
+    if (this.#materializationDebounceTimer) {
+      clearTimeout(this.#materializationDebounceTimer)
+      this.#materializationDebounceTimer = undefined
+    }
+    if (this.#materializationRetryTimer) {
+      clearTimeout(this.#materializationRetryTimer)
+      this.#materializationRetryTimer = undefined
+    }
     if (revision !== null) {
       for (const change of revision.outcomeChanges) {
         if (change.previous !== null && change.previous !== change.current) {
@@ -521,6 +560,43 @@ export class ChronologNode {
       }
       this.#emit('materialized')
     }
+  }
+
+  #scheduleMaterialization(): void {
+    if (this.#closed || !this.#materializationPending) return
+    if (this.#materializationDebounceTimer) clearTimeout(this.#materializationDebounceTimer)
+    this.#materializationDebounceTimer = setTimeout(() => {
+      this.#materializationDebounceTimer = undefined
+      void this.#mutex.run(async () => {
+        if (this.#closed || !this.#materializationPending) return
+        try {
+          await this.#reconcileMaterializer()
+        } catch (error) {
+          this.#recordError(error)
+          this.#scheduleMaterializationRetry()
+        }
+      })
+    }, 25)
+    this.#materializationDebounceTimer.unref?.()
+  }
+
+  #scheduleMaterializationRetry(): void {
+    if (this.#closed || !this.#materializationPending || this.#materializationRetryTimer) return
+    const delay = this.#materializationRetryMs
+    this.#materializationRetryMs = Math.min(this.#materializationRetryMs * 2, 5_000)
+    this.#materializationRetryTimer = setTimeout(() => {
+      this.#materializationRetryTimer = undefined
+      void this.#mutex.run(async () => {
+        if (this.#closed || !this.#materializationPending) return
+        try {
+          await this.#reconcileMaterializer()
+        } catch (error) {
+          this.#recordError(error)
+          this.#scheduleMaterializationRetry()
+        }
+      })
+    }, delay)
+    this.#materializationRetryTimer.unref?.()
   }
 
   #emit(reason: NodeRevisionEvent['reason'], txId?: Uint8Array, error?: Error): void {

@@ -53,6 +53,7 @@ export class StreamResource<T> implements AsyncIterable<T> {
   readonly #options: StreamResourceOptions<T>
   readonly #listeners = new Set<StreamListener>()
   readonly #valueListeners = new Set<(value: T) => void>()
+  readonly #disposeListeners = new Set<() => void>()
   #snapshot: StreamSnapshot<T>
   #controller: AbortController | undefined
   #run: Promise<void> | undefined
@@ -97,6 +98,14 @@ export class StreamResource<T> implements AsyncIterable<T> {
     this.#publish(this.#withPrevious('closed', 0))
     this.#listeners.clear()
     this.#valueListeners.clear()
+    for (const listener of this.#disposeListeners) listener()
+    this.#disposeListeners.clear()
+  }
+
+  onDispose(listener: () => void): () => void {
+    if (this.#disposed) { listener(); return () => undefined }
+    this.#disposeListeners.add(listener)
+    return () => this.#disposeListeners.delete(listener)
   }
 
   async *[Symbol.asyncIterator](): AsyncIterator<T> {

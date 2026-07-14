@@ -11,6 +11,7 @@ import { HttpRpcServer, NodeRpcService } from '@chronolog/rpc'
 import { SsbDb2Transport, type SsbPeer } from '@chronolog/transport-ssb'
 
 import { fromBase64, loadOrCreateConfig } from './config.js'
+import { loadStaticMembership } from './static-membership.js'
 
 const dataDirectory = resolve(process.env.CHRONOLOG_DATA_DIR ?? '.chronolog')
 const { config, identity } = await loadOrCreateConfig(dataDirectory)
@@ -22,7 +23,7 @@ const validatorCapability = fromBase64(config.validatorCapability)
 // Standalone bootstrap profile: a root-controlled single participant. Replace
 // this resolver with reduceCapabilityLog(...) or an external membership source
 // when adding participants; node-core never assumes a fixed validator list.
-const membership: MembershipResolver = {
+const standaloneMembership: MembershipResolver = {
   canWrite: (context) =>
     equalBytes(context.membershipRevision, membershipRevision) &&
     equalBytes(context.writerId, identity.publicKeyBytes),
@@ -38,10 +39,20 @@ const membership: MembershipResolver = {
     threshold: 1,
   }),
 }
+const membership = process.env.CHRONOLOG_STATIC_MEMBERSHIP_FILE === undefined
+  ? standaloneMembership
+  : await loadStaticMembership(resolve(process.env.CHRONOLOG_STATIC_MEMBERSHIP_FILE), {
+      groupId,
+      membershipRevision,
+      validationPolicy,
+    })
 
 const configuredPeers = process.env.CHRONOLOG_SSB_PEERS === undefined
   ? []
   : JSON.parse(process.env.CHRONOLOG_SSB_PEERS) as SsbPeer[]
+const staleReconnectMs = process.env.CHRONOLOG_SSB_STALE_RECONNECT_MS === undefined
+  ? undefined
+  : Number(process.env.CHRONOLOG_SSB_STALE_RECONNECT_MS)
 const schemaManifest = await loadSchemaManifest(dataDirectory)
 const nativeEngine = readNativeEngineInfo()
 const executionManifest = createCoreExecutionManifest({
@@ -57,6 +68,7 @@ const transport = await SsbDb2Transport.open({
       scope: process.env.CHRONOLOG_SSB_SCOPE === 'public' ? 'public' : process.env.CHRONOLOG_SSB_SCOPE === 'local' ? 'local' : 'device',
     },
     peers: configuredPeers,
+    ...(staleReconnectMs === undefined ? {} : { reconnect: { staleAfterMs: staleReconnectMs } }),
   },
 })
 const materializer = await DeterministicMaterializer.open({
@@ -113,8 +125,22 @@ async function stop(signal: string): Promise<void> {
   await node.close()
 }
 
-process.once('SIGINT', () => { void stop('SIGINT') })
-process.once('SIGTERM', () => { void stop('SIGTERM') })
+function terminate(signal: string): void {
+  void stop(signal).then(
+    () => process.exit(0),
+    (error: unknown) => {
+      process.stderr.write(`${JSON.stringify({
+        event: 'chronologd.stop_failed',
+        signal,
+        error: error instanceof Error ? error.stack ?? error.message : String(error),
+      })}\n`)
+      process.exit(1)
+    },
+  )
+}
+
+process.once('SIGINT', () => terminate('SIGINT'))
+process.once('SIGTERM', () => terminate('SIGTERM'))
 
 async function loadSchemaManifest(directory: string): Promise<SchemaManifest> {
   const configured = process.env.CHRONOLOG_SCHEMA_FILE

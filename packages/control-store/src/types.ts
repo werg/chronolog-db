@@ -173,6 +173,9 @@ export interface ControlStoreSnapshot {
 export interface ControlStorePersistence {
   load(): ControlStoreSnapshot | null
   save(snapshot: ControlStoreSnapshot): void
+  /** Optional coalescing hook for rebuildable persistence implementations. */
+  requestSave?(snapshot: () => ControlStoreSnapshot): void
+  flush?(): void
 }
 
 export interface AdmissionEvaluation {

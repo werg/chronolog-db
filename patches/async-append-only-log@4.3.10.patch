@@ -1,0 +1,140 @@
+diff --git a/index.js b/index.js
+--- a/index.js
++++ b/index.js
+@@ -5,6 +5,8 @@
+ const Cache = require('@alloc/quick-lru')
+ const RAF = require('polyraf')
+ const Obv = require('obz')
++const crypto = require('crypto')
++const path = require('path')
+ const AtomicFile = require('atomic-file-rw')
+ const debounce = require('lodash.debounce')
+ const isBufferZero = require('is-buffer-zero')
+@@ -49,6 +51,9 @@
+   const cache = new Cache({ maxSize: 1024 }) // This is potentially 64 MiB!
+   const raf = RAF(filename)
+   const statsFilename = filename + '.stats'
++  const journalFilename = filename + '.chronolog-journal'
++  const JOURNAL_MAGIC = Buffer.from('CHRONJ01')
++  const JOURNAL_HEADER_SIZE = JOURNAL_MAGIC.length + 8 + 32
+   const blockSize = (opts && opts.blockSize) || DEFAULT_BLOCK_SIZE
+   const codec = (opts && opts.codec) || DEFAULT_CODEC
+   const writeTimeout = (opts && opts.writeTimeout) || DEFAULT_WRITE_TIMEOUT
+@@ -69,6 +74,80 @@
+   let deletedBytes = 0
+   const since = Obv() // offset of last written record
+   let compaction = null
++
++  // async-append-only-log rewrites the mutable tail block in place. A process
++  // kill during a later rewrite can otherwise tear records which were already
++  // fsynced and replicated, causing a classic SSB author feed to fork after
++  // restart. Journal the complete target block before every overwrite and
++  // replay it before scanning the log on startup. A stale complete journal is
++  // safe to replay; a partial or corrupt journal is ignored because the main
++  // file has not yet been touched for that write.
++  function checksum(blockBuf) {
++    return crypto.createHash('sha256').update(blockBuf).digest()
++  }
++
++  function fsyncParentDirectory() {
++    let fd
++    try {
++      fd = fs.openSync(path.dirname(journalFilename), 'r')
++      fs.fsyncSync(fd)
++    } finally {
++      if (fd !== undefined) fs.closeSync(fd)
++    }
++  }
++
++  function persistJournal(blockStart, blockBuf) {
++    const existed = fs.existsSync(journalFilename)
++    const journal = Buffer.allocUnsafe(JOURNAL_HEADER_SIZE + blockBuf.length)
++    JOURNAL_MAGIC.copy(journal, 0)
++    journal.writeBigUInt64LE(BigInt(blockStart), JOURNAL_MAGIC.length)
++    checksum(blockBuf).copy(journal, JOURNAL_MAGIC.length + 8)
++    blockBuf.copy(journal, JOURNAL_HEADER_SIZE)
++    let fd
++    try {
++      fd = fs.openSync(journalFilename, 'w', 0o600)
++      fs.writeFileSync(fd, journal)
++      fs.fsyncSync(fd)
++    } finally {
++      if (fd !== undefined) fs.closeSync(fd)
++    }
++    if (!existed) fsyncParentDirectory()
++  }
++
++  function clearJournal() {
++    let fd
++    try {
++      fd = fs.openSync(journalFilename, 'w', 0o600)
++      fs.fsyncSync(fd)
++    } finally {
++      if (fd !== undefined) fs.closeSync(fd)
++    }
++  }
++
++  function recoverJournal() {
++    if (!fs.existsSync(journalFilename)) return
++    const journal = fs.readFileSync(journalFilename)
++    if (journal.length !== JOURNAL_HEADER_SIZE + blockSize) return clearJournal()
++    if (!journal.subarray(0, JOURNAL_MAGIC.length).equals(JOURNAL_MAGIC)) return clearJournal()
++    const blockStartBig = journal.readBigUInt64LE(JOURNAL_MAGIC.length)
++    if (blockStartBig > BigInt(Number.MAX_SAFE_INTEGER)) return clearJournal()
++    const blockStart = Number(blockStartBig)
++    if (blockStart < 0 || blockStart % blockSize !== 0) return clearJournal()
++    const expected = journal.subarray(JOURNAL_MAGIC.length + 8, JOURNAL_HEADER_SIZE)
++    const blockBuf = journal.subarray(JOURNAL_HEADER_SIZE)
++    if (!checksum(blockBuf).equals(expected)) return clearJournal()
++    let fd
++    try {
++      fd = fs.openSync(filename, fs.existsSync(filename) ? 'r+' : 'w+', 0o600)
++      fs.writeSync(fd, blockBuf, 0, blockBuf.length, blockStart)
++      fs.fsyncSync(fd)
++    } finally {
++      if (fd !== undefined) fs.closeSync(fd)
++    }
++    clearJournal()
++  }
++
++  recoverJournal()
+   const compactionProgress = Obv()
+   if (typeof window !== 'undefined') {
+     // fs sync not working in browser
+@@ -171,15 +250,34 @@
+ 
+   function writeWithFSync(blockStart, blockBuf, successValue, cb) {
+     writeLock(function onWriteLockReleased(unlock) {
++      try {
++        persistJournal(blockStart, blockBuf)
++      } catch (err) {
++        return unlock(cb, err)
++      }
+       raf.write(blockStart, blockBuf, function onRAFWriteDone(err) {
+         if (err) return unlock(cb, err)
+ 
+         if (raf.fd) {
+           fs.fsync(raf.fd, function onFSyncDone(err) {
+             if (err) unlock(cb, err)
+-            else unlock(cb, null, successValue)
++            else {
++              try {
++                clearJournal()
++                unlock(cb, null, successValue)
++              } catch (err) {
++                unlock(cb, err)
++              }
++            }
+           })
+-        } else unlock(cb, null, successValue)
++        } else {
++          try {
++            clearJournal()
++            unlock(cb, null, successValue)
++          } catch (err) {
++            unlock(cb, err)
++          }
++        }
+       })
+     })
+   }

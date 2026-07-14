@@ -8,6 +8,9 @@ patchedDependencies:
   '@dolthub/doltlite@0.11.29':
     hash: b8b12ba33968f3e1d16602d663535fa7db735a63d12677d1d7352e8a755a94e9
     path: patches/@dolthub__doltlite@0.11.29.patch
+  async-append-only-log@4.3.10:
+    hash: e32d2cddeeea93f3bb8e6ef09b226c8711ddf526bd106a503bd31c1755ee4ed8
+    path: patches/async-append-only-log@4.3.10.patch
 
 importers:
 

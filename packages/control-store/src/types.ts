@@ -34,6 +34,10 @@ export interface StoredAttestation {
   readonly validatorFeedSequence: bigint
   readonly authorTimestampMs: bigint
   readonly acceptedAboveMs: bigint
+  /** Validator policy implementation version committed by the signed proof. */
+  readonly policyVersion: bigint
+  /** Authenticated outer feed which carried the signed proof. */
+  readonly transportAuthor: string
 }
 
 export interface ValidatorHeartbeat {
@@ -165,17 +169,41 @@ export interface ControlStoreSnapshot {
   readonly heartbeats: readonly ValidatorHeartbeat[]
   readonly orderedTxIds: readonly Uint8Array[]
   readonly deltas: readonly ControlStoreDelta[]
+  /** Highest sequence no longer retained in `deltas`. */
+  readonly deltaFloor?: bigint
   readonly materializedHead: MaterializedHead | null
   readonly checkpoints: readonly StoredCheckpoint[]
   readonly historyReopenings: readonly HistoryReopening[]
+  /**
+   * Cutoffs are validator signing state rather than a rebuildable index. They
+   * are written synchronously before a validator publishes a signed record.
+   * Optional for snapshots produced before cutoff journaling was introduced.
+   */
+  readonly validatorCutoffs?: readonly {
+    readonly validatorId: Uint8Array
+    readonly acceptedAboveMs: bigint
+  }[]
 }
 
 export interface ControlStorePersistence {
   load(): ControlStoreSnapshot | null
   save(snapshot: ControlStoreSnapshot): void
+  /** Loads non-rebuildable validator signing state from its independent journal. */
+  loadValidatorCutoffs?(): readonly ValidatorCutoffState[] | null
+  /** Initializes the independent cutoff journal after loading a valid legacy snapshot. */
+  initializeValidatorCutoffs?(cutoffs: readonly ValidatorCutoffState[]): void
+  /** Synchronously and durably advances one validator's signing cutoff. */
+  saveValidatorCutoff?(cutoff: ValidatorCutoffState): void
   /** Optional coalescing hook for rebuildable persistence implementations. */
   requestSave?(snapshot: () => ControlStoreSnapshot): void
   flush?(): void
+  /** Quarantines a structurally corrupt rebuildable snapshot, if supported. */
+  recoverCorruptSnapshot?(error: unknown): boolean
+}
+
+export interface ValidatorCutoffState {
+  readonly validatorId: Uint8Array
+  readonly acceptedAboveMs: bigint
 }
 
 export interface AdmissionEvaluation {

@@ -2,6 +2,7 @@ import { ControlStore } from '@chronolog/control-store'
 import { IrBuilder, values } from '@chronolog/ir'
 import {
   encodeTransactionCore,
+  equalBytes,
   generateEd25519KeyPair,
   transactionDigest,
   transactionOrderKey,
@@ -95,6 +96,8 @@ describe('ChronologNode materializer reconciliation', () => {
         canWrite: () => true,
         canValidate: () => false,
         threshold: () => 1,
+        canUseTransportAuthor: ({ signingId, transportAuthor }) =>
+          equalBytes(signingId, identity.publicKeyBytes) && transportAuthor === record.author,
       },
     })
 

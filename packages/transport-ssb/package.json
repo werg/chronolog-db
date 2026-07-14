@@ -6,6 +6,7 @@
   "exports": "./src/index.ts",
   "dependencies": {
     "@chronolog/protocol": "workspace:*",
+    "proper-lockfile": "4.1.2",
     "secret-stack": "6.4.1",
     "ssb-caps": "1.1.0",
     "ssb-db2": "8.1.0",

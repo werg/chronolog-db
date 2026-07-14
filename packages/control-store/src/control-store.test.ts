@@ -38,6 +38,8 @@ function attestation(id: number, txId: number, validator = id): StoredAttestatio
     validatorFeedSequence: BigInt(id),
     authorTimestampMs: BigInt(txId),
     acceptedAboveMs: 0n,
+    policyVersion: 1n,
+    transportAuthor: `@validator-${validator}.ed25519`,
   }
 }
 
@@ -171,6 +173,36 @@ describe('ControlStore', () => {
       9_007_199_254_740_993n,
     )
     expect(restored.changesSince(0n).length).toBe(first.changesSince(0n).length)
+  })
+
+  it('bounds retained deltas and exposes an explicit snapshot reset floor', () => {
+    const store = new ControlStore(null, { maximumRetainedDeltas: 3 })
+    for (let id = 1; id <= 5; id += 1) store.putCandidate(candidate(id, BigInt(id)))
+
+    expect(store.deltaFloor).toBe(2n)
+    expect(store.changesSince(store.deltaFloor)).toHaveLength(3)
+    expect(() => store.changesSince(0n)).toThrowError('CONTROL_STORE_DELTA_HISTORY_RESET')
+    expect(store.snapshot().deltas).toHaveLength(3)
+  })
+
+  it('scopes heartbeat watermarks to the candidate membership revision', () => {
+    const store = new ControlStore()
+    store.recordHeartbeat(heartbeat(1, 100n))
+    store.recordHeartbeat({
+      ...heartbeat(1, 200n),
+      heartbeatId: bytes(1, 200),
+      membershipRevision: bytes(2),
+    })
+    const policy = {
+      kind: 'threshold' as const,
+      policyId: 'one',
+      validatorIds: [bytes(1)],
+      threshold: 1,
+    }
+
+    expect(store.watermark(policy, bytes(1)).cutoffMs).toBe(100n)
+    expect(store.watermark(policy, bytes(2)).cutoffMs).toBe(200n)
+    expect(store.watermark(policy, bytes(3)).cutoffMs).toBeNull()
   })
 
   it('rejects conflicting duplicate identities and later regressing cutoffs', () => {

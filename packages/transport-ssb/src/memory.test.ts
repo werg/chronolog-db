@@ -33,4 +33,26 @@ describe('MemoryTransportNetwork', () => {
     controller.abort()
     expect((await iterator.next()).done).toBe(true)
   })
+
+  it('reports non-contiguous feed observations truthfully', async () => {
+    const network = new MemoryTransportNetwork()
+    const node = network.createNode('@observer.ed25519')
+    node.receive({
+      id: '%gap.sha256',
+      author: '@remote.ed25519',
+      sequence: 2n,
+      receivedAtMs: 1,
+      payload: Uint8Array.of(9),
+    })
+
+    expect(await node.status()).toMatchObject({
+      feedsWithGaps: 1,
+      feedStates: [{
+        feedId: '@remote.ed25519',
+        contiguousThrough: '0',
+        maximumSequence: '2',
+        hasGaps: true,
+      }],
+    })
+  })
 })

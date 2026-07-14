@@ -26,6 +26,16 @@ export interface TransportStatus {
     readonly maximumSequence?: string
   }[]
   readonly lastCatchUpError?: string
+  /** Per-feed local replication state derived from the transport's vector clock. */
+  readonly feedStates?: readonly {
+    readonly feedId: string
+    /** Highest sequence for which the complete signed feed prefix is present locally. */
+    readonly contiguousThrough: string
+    /** Highest locally observed sequence, including any out-of-order record. */
+    readonly maximumSequence: string
+    readonly hasGaps: boolean
+  }[]
+  readonly feedsWithGaps?: number
   /** True when derived SSB indexes were rebuilt after an unclean prior exit. */
   readonly recoveredAfterUncleanClose?: boolean
 }

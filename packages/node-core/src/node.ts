@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto'
 
 import {
   ControlStore,
+  ControlStoreConflictError,
   type SettlementEvidence,
   type StoredAttestation,
   type StoredCandidate,
@@ -49,6 +50,9 @@ export class ChronologNode {
   readonly #mutex = new Mutex()
   readonly #events = new RevisionBroadcaster<NodeRevisionEvent>()
   readonly #seen = new Set<string>()
+  readonly #retryRecords = new Map<string, TransportRecord>()
+  readonly #maximumRetryRecords: number
+  #retryOverflow = false
   readonly #candidateCores = new Map<string, TransactionCore>()
   readonly #replayedOutcomes = new Set<string>()
   readonly #abort = new AbortController()
@@ -57,10 +61,12 @@ export class ChronologNode {
   #closed = false
   #consumeTask: Promise<void> | null = null
   #lastError: Error | undefined
+  #ingestionError: Error | undefined
   #acceptedAboveMs: bigint
   #heartbeatTimer: ReturnType<typeof setInterval> | undefined
   #materializationDebounceTimer: ReturnType<typeof setTimeout> | undefined
   #materializationRetryTimer: ReturnType<typeof setTimeout> | undefined
+  #ingestionRetryTimer: ReturnType<typeof setTimeout> | undefined
   #materializationRetryMs = 100
   #materializationPending = false
   #lastAuthoredTimestampMs = -1n
@@ -68,9 +74,16 @@ export class ChronologNode {
   constructor(options: ChronologNodeOptions) {
     this.#options = options
     this.#control = options.controlStore ?? new ControlStore()
+    this.#maximumRetryRecords = options.maximumRetryRecords ?? 4_096
+    if (!Number.isSafeInteger(this.#maximumRetryRecords) || this.#maximumRetryRecords < 1) {
+      throw new RangeError('NODE_INVALID_RETRY_CAPACITY')
+    }
     this.#revision = this.#control.sequence
     const snapshot = this.#control.snapshot()
     const persistedCutoffs = [
+      ...(this.#control.validatorCutoff(options.identity.publicKeyBytes) === null
+        ? []
+        : [this.#control.validatorCutoff(options.identity.publicKeyBytes)!]),
       ...snapshot.heartbeats
         .filter((item) => equalBytes(item.validatorId, options.identity.publicKeyBytes))
         .map((item) => item.acceptanceCutoffMs),
@@ -111,10 +124,12 @@ export class ChronologNode {
   async start(): Promise<void> {
     if (this.#closed) throw new Error('NODE_CLOSED')
     if (this.#started) return
+    const history = await this.#options.transport.history()
+    await this.#recoverValidatorCutoff(history)
     this.#started = true
     const subscription = this.#options.transport.subscribe(this.#abort.signal)
     this.#consumeTask = this.#consume(subscription)
-    await this.#drainHistory()
+    await this.#drainHistory(history)
     // The control store is authoritative and is committed before the derived
     // DoltLite revision. A crash between those two writes can therefore leave
     // an admissible order ahead of the materializer. Reconcile even when replay
@@ -171,6 +186,12 @@ export class ChronologNode {
       writerId: core.authorId,
     })
     if (!canWrite) throw new Error('WRITER_UNAUTHORIZED')
+    if (!await this.#membershipAllowsTransportAuthor(
+      this.#options.transport.identity,
+      'writer',
+      core.authorId,
+      core.membershipRevision,
+    )) throw new Error('LOCAL_TRANSPORT_AUTHOR_UNAUTHORIZED')
     const canonical = encodeTransactionCore(core)
     const candidateDigest = await transactionDigest(canonical)
     const envelope = await encodeSignedEnvelope(this.#groupRoute(), 'candidate', canonical, this.#options.identity, this.#options.envelopeCipher)
@@ -183,8 +204,22 @@ export class ChronologNode {
     this.#assertReady()
     const validator = this.#options.validator
     if (!validator) throw new Error('NODE_NOT_VALIDATOR')
+    if (!await this.#heartbeatAuthorized({
+      groupId: this.#options.groupId,
+      membershipRevision: this.#options.membershipRevision,
+      validatorId: this.identity,
+      validatorCapability: validator.capabilityId,
+    })) throw new Error('VALIDATOR_UNAUTHORIZED')
+    if (!await this.#membershipAllowsTransportAuthor(
+      this.#options.transport.identity,
+      'validator',
+      this.identity,
+      this.#options.membershipRevision,
+      validator.capabilityId,
+    )) throw new Error('LOCAL_TRANSPORT_AUTHOR_UNAUTHORIZED')
     const now = this.#clockNow()
     this.#advanceValidatorCutoff(now)
+    this.#persistValidatorCutoff()
     const heartbeat: ValidatorHeartbeat = {
       groupId: this.#options.groupId,
       membershipRevision: this.#options.membershipRevision,
@@ -202,15 +237,31 @@ export class ChronologNode {
     await this.#mutex.run(async () => {
       if (this.#seen.has(record.id)) return
       try {
-        const wire = await decodeSignedEnvelope(record.payload, this.#groupRoute(), this.#options.envelopeCipher)
+        const wire = await this.#decodeRecord(record)
         if (wire.type === 'candidate') await this.#ingestCandidate(record, wire.payload, wire.signer)
         else if (wire.type === 'attestation') await this.#ingestAttestation(record, wire.payload, wire.signer)
         else await this.#ingestHeartbeat(record, wire.payload, wire.signer)
         this.#seen.add(record.id)
+        this.#retryRecords.delete(record.id)
+        if (this.#retryRecords.size === 0 && !this.#retryOverflow) this.#ingestionError = undefined
       } catch (error) {
-        this.#seen.add(record.id)
-        this.#recordError(error)
-        this.#scheduleMaterializationRetry()
+        if (error instanceof TerminalIngestError || error instanceof ControlStoreConflictError) {
+          this.#seen.add(record.id)
+          this.#retryRecords.delete(record.id)
+          if (error instanceof ControlStoreConflictError) this.#recordError(error)
+          else this.#emit('error', undefined, error)
+        } else {
+          if (this.#retryRecords.has(record.id) || this.#retryRecords.size < this.#maximumRetryRecords) {
+            this.#retryRecords.set(record.id, structuredClone(record))
+          } else {
+            // Keep memory bounded. Once capacity becomes available, the
+            // authoritative transport history supplies records that could not
+            // be retained in this process-local retry set.
+            this.#retryOverflow = true
+          }
+          this.#scheduleIngestionRetry()
+          this.#recordIngestionError(error)
+        }
       }
     })
   }
@@ -259,7 +310,7 @@ export class ChronologNode {
     if (!core) return null
     const policy = await this.#options.membership.watermarkPolicy?.(core)
     if (!policy) return null
-    return this.#control.settlementEvidence(txId, policy)
+    return this.#control.settlementEvidence(txId, policy, core.membershipRevision)
   }
 
   async watermark(txId?: Uint8Array): Promise<WatermarkEvidence | null> {
@@ -270,7 +321,7 @@ export class ChronologNode {
     const core = this.candidateCore(candidate.txId)
     if (!core) return null
     const policy = await this.#options.membership.watermarkPolicy?.(core)
-    return policy ? this.#control.watermark(policy) : null
+    return policy ? this.#control.watermark(policy, core.membershipRevision) : null
   }
 
   events(afterRevision = 0n, signal?: AbortSignal): AsyncIterable<NodeRevisionEvent> {
@@ -285,6 +336,7 @@ export class ChronologNode {
   }
 
   async status(): Promise<NodeStatus> {
+    const error = this.#lastError ?? this.#ingestionError
     const status: NodeStatus = {
       started: this.#started,
       closed: this.#closed,
@@ -299,7 +351,7 @@ export class ChronologNode {
       executionManifestDigest: this.executionManifestDigest,
       validating: this.#options.validator !== undefined,
       transport: await this.#options.transport.status(),
-      ...(this.#lastError === undefined ? {} : { lastError: this.#lastError.message }),
+      ...(error === undefined ? {} : { lastError: error.message }),
     }
     return status
   }
@@ -326,6 +378,7 @@ export class ChronologNode {
     if (this.#heartbeatTimer) clearInterval(this.#heartbeatTimer)
     if (this.#materializationDebounceTimer) clearTimeout(this.#materializationDebounceTimer)
     if (this.#materializationRetryTimer) clearTimeout(this.#materializationRetryTimer)
+    if (this.#ingestionRetryTimer) clearTimeout(this.#ingestionRetryTimer)
     await this.#consumeTask?.catch(() => {})
     await this.#mutex.run(async () => {
       if (!this.#materializationPending) return
@@ -337,8 +390,8 @@ export class ChronologNode {
     await this.#options.transport.close()
   }
 
-  async #drainHistory(): Promise<void> {
-    for (const record of await this.#options.transport.history()) await this.ingest(record)
+  async #drainHistory(history: readonly TransportRecord[]): Promise<void> {
+    for (const record of history) await this.ingest(record)
   }
 
   async #consume(records: AsyncIterable<TransportRecord>): Promise<void> {
@@ -350,12 +403,15 @@ export class ChronologNode {
   }
 
   async #ingestCandidate(record: TransportRecord, canonical: Uint8Array, signer: Uint8Array): Promise<void> {
-    const core = decodeTransactionCore(canonical)
-    if (!equalBytes(core.groupId, this.#options.groupId)) throw new Error('CANDIDATE_WRONG_GROUP')
-    if (!equalBytes(core.authorId, signer)) throw new Error('CANDIDATE_SIGNER_MISMATCH')
-    if (!equalBytes(core.schemaDigest, this.schemaDigest)) throw new Error('CANDIDATE_SCHEMA_DIGEST_MISMATCH')
+    const core = this.#decodeCandidate(canonical)
+    if (!equalBytes(core.groupId, this.#options.groupId)) invalid('CANDIDATE_WRONG_GROUP')
+    if (!equalBytes(core.authorId, signer)) invalid('CANDIDATE_SIGNER_MISMATCH')
+    if (!await this.#canUseTransportAuthor(record, 'writer', signer, core.membershipRevision)) {
+      invalid('CANDIDATE_TRANSPORT_AUTHOR_UNAUTHORIZED')
+    }
+    if (!equalBytes(core.schemaDigest, this.schemaDigest)) invalid('CANDIDATE_SCHEMA_DIGEST_MISMATCH')
     if (!equalBytes(core.executionManifestDigest, this.executionManifestDigest)) {
-      throw new Error('CANDIDATE_EXECUTION_MANIFEST_DIGEST_MISMATCH')
+      invalid('CANDIDATE_EXECUTION_MANIFEST_DIGEST_MISMATCH')
     }
     const writerContext = {
       groupId: core.groupId,
@@ -392,6 +448,7 @@ export class ChronologNode {
     if (!validator) return
     const now = this.#clockNow()
     this.#advanceValidatorCutoff(now)
+    this.#persistValidatorCutoff()
     const futureLimit = BigInt(Math.trunc(now + (validator.maxFutureSkewMs ?? 30_000)))
     if (core.authorTimestampMs > futureLimit || core.authorTimestampMs <= this.#acceptedAboveMs) return
     const context = {
@@ -403,7 +460,18 @@ export class ChronologNode {
       validatorCapability: validator.capabilityId,
     }
     if (!await this.#options.membership.canValidate(context)) return
+    if (!await this.#membershipAllowsTransportAuthor(
+      this.#options.transport.identity,
+      'validator',
+      this.identity,
+      core.membershipRevision,
+      validator.capabilityId,
+    )) throw new Error('LOCAL_TRANSPORT_AUTHOR_UNAUTHORIZED')
     if (this.#control.attestationsFor(txId).some((item) => equalBytes(item.validatorId, this.identity))) return
+    const policyVersion = await this.#expectedPolicyVersion(core)
+    if (policyVersion < 0n) return
+    const configuredPolicyVersion = validator.policyVersion ?? policyVersion
+    if (configuredPolicyVersion !== policyVersion) throw new Error('VALIDATOR_POLICY_VERSION_MISMATCH')
     const attestation: ValidatorAttestation = {
       groupId: core.groupId,
       membershipRevision: core.membershipRevision,
@@ -414,7 +482,7 @@ export class ChronologNode {
       acceptedAboveMs: this.#acceptedAboveMs,
       candidateDigest: candidate.candidateDigest,
       decision: 'admit',
-      policyVersion: validator.policyVersion ?? 1n,
+      policyVersion,
     }
     const payload = encodeValidatorAttestation(attestation)
     const envelope = await encodeSignedEnvelope(this.#groupRoute(), 'attestation', payload, this.#options.identity, this.#options.envelopeCipher)
@@ -424,24 +492,25 @@ export class ChronologNode {
   }
 
   async #ingestAttestation(record: TransportRecord, encoded: Uint8Array, signer: Uint8Array): Promise<void> {
-    const value = decodeValidatorAttestation(encoded)
-    if (!equalBytes(value.groupId, this.#options.groupId)) throw new Error('ATTESTATION_WRONG_GROUP')
-    if (!equalBytes(value.validatorId, signer)) throw new Error('ATTESTATION_SIGNER_MISMATCH')
+    const value = this.#decodeAttestation(encoded)
+    if (!equalBytes(value.groupId, this.#options.groupId)) invalid('ATTESTATION_WRONG_GROUP')
+    if (!equalBytes(value.validatorId, signer)) invalid('ATTESTATION_SIGNER_MISMATCH')
+    if (!await this.#canUseTransportAuthor(
+      record,
+      'validator',
+      signer,
+      value.membershipRevision,
+      value.validatorCapability,
+    )) invalid('ATTESTATION_TRANSPORT_AUTHOR_UNAUTHORIZED')
+    if (
+      equalBytes(value.validatorId, this.identity) &&
+      record.author === this.#options.transport.identity &&
+      value.acceptedAboveMs > this.#acceptedAboveMs
+    ) {
+      this.#acceptedAboveMs = value.acceptedAboveMs
+      this.#persistValidatorCutoff()
+    }
     const core = this.#candidateCores.get(this.#idKey(value.txId))
-    const candidate = this.#control.getCandidate(value.txId)
-    if (candidate && !equalBytes(candidate.candidateDigest, value.candidateDigest)) throw new Error('ATTESTATION_DIGEST_MISMATCH')
-    if (core && (
-      !equalBytes(core.membershipRevision, value.membershipRevision) ||
-      core.authorTimestampMs !== value.authorTimestampMs
-    )) throw new Error('ATTESTATION_CANDIDATE_MISMATCH')
-    if (core && !await this.#options.membership.canValidate({
-      groupId: core.groupId,
-      membershipRevision: value.membershipRevision,
-      validationPolicy: core.validationPolicy,
-      writerId: core.authorId,
-      validatorId: value.validatorId,
-      validatorCapability: value.validatorCapability,
-    })) throw new Error('VALIDATOR_UNAUTHORIZED')
     const stored: StoredAttestation = {
       attestationId: utf8(record.id),
       txId: value.txId,
@@ -452,6 +521,8 @@ export class ChronologNode {
       validatorFeedSequence: record.sequence,
       authorTimestampMs: value.authorTimestampMs,
       acceptedAboveMs: value.acceptedAboveMs,
+      policyVersion: value.policyVersion,
+      transportAuthor: record.author,
     }
     const inserted = this.#control.putAttestation(stored)
     if (inserted.added) this.#emit('attestation', value.txId)
@@ -469,13 +540,21 @@ export class ChronologNode {
     }
     const threshold = await this.#options.membership.threshold(context)
     if (!Number.isSafeInteger(threshold) || threshold < 1) throw new Error('INVALID_VALIDATION_THRESHOLD')
+    const eligible: StoredAttestation[] = []
+    const validators = new Set<string>()
+    for (const attestation of this.#control.attestationsFor(txId)) {
+      const key = this.#idKey(attestation.validatorId)
+      if (validators.has(key) || !await this.#isValidAdmissionProof(candidate, core, attestation)) continue
+      validators.add(key)
+      eligible.push(attestation)
+    }
     const customSelection = await this.#options.membership.selectAdmission?.(
       context,
-      this.#control.attestationsFor(txId),
+      eligible,
     )
     if (customSelection !== undefined) {
       if (customSelection.length === 0) return
-      const available = new Set(this.#control.attestationsFor(txId).map((item) => this.#idKey(item.attestationId)))
+      const available = new Set(eligible.map((item) => this.#idKey(item.attestationId)))
       if (customSelection.some((item) => !available.has(this.#idKey(item.attestationId)))) {
         throw new Error('MEMBERSHIP_RESOLVER_RETURNED_UNKNOWN_ATTESTATION')
       }
@@ -486,21 +565,6 @@ export class ChronologNode {
       this.#scheduleMaterialization()
       return
     }
-    const eligible: StoredAttestation[] = []
-    const validators = new Set<string>()
-    for (const attestation of this.#control.attestationsFor(txId)) {
-      const key = this.#idKey(attestation.validatorId)
-      if (validators.has(key)) continue
-      const accepted = await this.#options.membership.canValidate({
-        ...context,
-        validatorId: attestation.validatorId,
-        validatorCapability: attestation.validatorCapability,
-      })
-      if (accepted && equalBytes(attestation.candidateDigest, candidate.candidateDigest)) {
-        validators.add(key)
-        eligible.push(attestation)
-      }
-    }
     if (eligible.length < threshold) return
     this.#control.setCandidateState(txId, 'admissible', {
       proofAttestationIds: eligible.slice(0, threshold).map((item) => item.attestationId),
@@ -510,11 +574,26 @@ export class ChronologNode {
   }
 
   async #ingestHeartbeat(record: TransportRecord, encoded: Uint8Array, signer: Uint8Array): Promise<void> {
-    const heartbeat = decodeValidatorHeartbeat(encoded)
-    if (!equalBytes(heartbeat.groupId, this.#options.groupId)) throw new Error('HEARTBEAT_WRONG_GROUP')
-    if (!equalBytes(heartbeat.validatorId, signer)) throw new Error('HEARTBEAT_SIGNER_MISMATCH')
+    const heartbeat = this.#decodeHeartbeat(encoded)
+    if (!equalBytes(heartbeat.groupId, this.#options.groupId)) invalid('HEARTBEAT_WRONG_GROUP')
+    if (!equalBytes(heartbeat.validatorId, signer)) invalid('HEARTBEAT_SIGNER_MISMATCH')
+    if (!await this.#canUseTransportAuthor(
+      record,
+      'validator',
+      signer,
+      heartbeat.membershipRevision,
+      heartbeat.validatorCapability,
+    )) invalid('HEARTBEAT_TRANSPORT_AUTHOR_UNAUTHORIZED')
+    const heartbeatAuthorized = await this.#heartbeatAuthorized({
+      groupId: heartbeat.groupId,
+      membershipRevision: heartbeat.membershipRevision,
+      validatorId: heartbeat.validatorId,
+      validatorCapability: heartbeat.validatorCapability,
+    })
+    if (!heartbeatAuthorized) invalid('HEARTBEAT_VALIDATOR_UNAUTHORIZED')
     if (equalBytes(heartbeat.validatorId, this.identity) && heartbeat.acceptanceCutoffMs > this.#acceptedAboveMs) {
       this.#acceptedAboveMs = heartbeat.acceptanceCutoffMs
+      this.#persistValidatorCutoff()
     }
     const recorded = this.#control.recordHeartbeat({
       heartbeatId: utf8(record.id),
@@ -523,7 +602,7 @@ export class ChronologNode {
       membershipRevision: heartbeat.membershipRevision,
       validatorFeedSequence: record.sequence,
       acceptanceCutoffMs: heartbeat.acceptanceCutoffMs,
-      feedContiguous: true,
+      feedContiguous: await this.#isFeedContiguous(record),
     })
     if (recorded !== null) this.#emit('heartbeat')
   }
@@ -599,6 +678,40 @@ export class ChronologNode {
     this.#materializationRetryTimer.unref?.()
   }
 
+  #scheduleIngestionRetry(): void {
+    if (this.#closed || (this.#retryRecords.size === 0 && !this.#retryOverflow) || this.#ingestionRetryTimer) return
+    this.#ingestionRetryTimer = setTimeout(() => {
+      this.#ingestionRetryTimer = undefined
+      const records = [...this.#retryRecords.values()].map((record) => structuredClone(record))
+      void (async () => {
+        for (const record of records) {
+          if (this.#closed) return
+          await this.ingest(record)
+        }
+        if (this.#retryOverflow && this.#retryRecords.size < this.#maximumRetryRecords) {
+          this.#retryOverflow = false
+          let history: readonly TransportRecord[]
+          try {
+            history = await this.#options.transport.history()
+          } catch (error) {
+            this.#retryOverflow = true
+            throw error
+          }
+          for (const record of history) {
+            if (this.#closed) return
+            if (this.#seen.has(record.id) || this.#retryRecords.has(record.id)) continue
+            if (this.#retryRecords.size >= this.#maximumRetryRecords) {
+              this.#retryOverflow = true
+              break
+            }
+            await this.ingest(record)
+          }
+        }
+      })().catch((error) => this.#recordError(error)).finally(() => this.#scheduleIngestionRetry())
+    }, 100)
+    this.#ingestionRetryTimer.unref?.()
+  }
+
   #emit(reason: NodeRevisionEvent['reason'], txId?: Uint8Array, error?: Error): void {
     this.#revision = this.#revision + 1n > this.#control.sequence
       ? this.#revision + 1n
@@ -617,7 +730,175 @@ export class ChronologNode {
     this.#emit('error', undefined, error)
   }
 
+  #recordIngestionError(value: unknown): void {
+    const error = value instanceof Error ? value : new Error(String(value))
+    this.#ingestionError = error
+    this.#emit('error', undefined, error)
+  }
+
   #clockNow(): number { return this.#options.clock?.now() ?? Date.now() }
+  async #decodeRecord(record: TransportRecord): Promise<Awaited<ReturnType<typeof decodeSignedEnvelope>>> {
+    try {
+      return await decodeSignedEnvelope(record.payload, this.#groupRoute(), this.#options.envelopeCipher)
+    } catch (error) {
+      throw new TerminalIngestError('INVALID_SIGNED_ENVELOPE', { cause: error })
+    }
+  }
+  #decodeCandidate(encoded: Uint8Array): TransactionCore {
+    try {
+      return decodeTransactionCore(encoded)
+    } catch (error) {
+      throw new TerminalIngestError('INVALID_CANDIDATE_PAYLOAD', { cause: error })
+    }
+  }
+  #decodeAttestation(encoded: Uint8Array): ValidatorAttestation {
+    try {
+      return decodeValidatorAttestation(encoded)
+    } catch (error) {
+      throw new TerminalIngestError('INVALID_ATTESTATION_PAYLOAD', { cause: error })
+    }
+  }
+  #decodeHeartbeat(encoded: Uint8Array): ValidatorHeartbeat {
+    try {
+      return decodeValidatorHeartbeat(encoded)
+    } catch (error) {
+      throw new TerminalIngestError('INVALID_HEARTBEAT_PAYLOAD', { cause: error })
+    }
+  }
+  async #recoverValidatorCutoff(history: readonly TransportRecord[]): Promise<void> {
+    if (!this.#options.validator) return
+    let recovered = this.#acceptedAboveMs
+    for (const record of history) {
+      if (record.author !== this.#options.transport.identity) continue
+      try {
+        const wire = await decodeSignedEnvelope(record.payload, this.#groupRoute(), this.#options.envelopeCipher)
+        if (!equalBytes(wire.signer, this.identity)) continue
+        if (wire.type === 'attestation') {
+          const attestation = decodeValidatorAttestation(wire.payload)
+          if (
+            equalBytes(attestation.groupId, this.#options.groupId) &&
+            equalBytes(attestation.validatorId, this.identity) &&
+            attestation.acceptedAboveMs > recovered
+          ) recovered = attestation.acceptedAboveMs
+        } else if (wire.type === 'heartbeat') {
+          const heartbeat = decodeValidatorHeartbeat(wire.payload)
+          if (
+            equalBytes(heartbeat.groupId, this.#options.groupId) &&
+            equalBytes(heartbeat.validatorId, this.identity) &&
+            heartbeat.acceptanceCutoffMs > recovered
+          ) recovered = heartbeat.acceptanceCutoffMs
+        }
+      } catch {
+        // Invalid application records are handled by normal ingestion. Cutoff
+        // preflight uses only fully verified records from our own outer feed.
+      }
+    }
+    this.#acceptedAboveMs = recovered
+    this.#persistValidatorCutoff()
+  }
+  #persistValidatorCutoff(): void {
+    if (!this.#options.validator) return
+    this.#control.persistValidatorCutoff(this.identity, this.#acceptedAboveMs)
+  }
+  async #expectedPolicyVersion(core: TransactionCore): Promise<bigint> {
+    return this.#options.membership.policyVersion?.({
+      groupId: core.groupId,
+      membershipRevision: core.membershipRevision,
+      validationPolicy: core.validationPolicy,
+      writerId: core.authorId,
+    }) ?? 1n
+  }
+  async #canUseTransportAuthor(
+    record: TransportRecord,
+    role: 'writer' | 'validator',
+    signingId: Uint8Array,
+    membershipRevision: Uint8Array,
+    validatorCapability?: Uint8Array,
+  ): Promise<boolean> {
+    return this.#membershipAllowsTransportAuthor(
+      record.author,
+      role,
+      signingId,
+      membershipRevision,
+      validatorCapability,
+    )
+  }
+  async #membershipAllowsTransportAuthor(
+    transportAuthor: string,
+    role: 'writer' | 'validator',
+    signingId: Uint8Array,
+    membershipRevision: Uint8Array,
+    validatorCapability?: Uint8Array,
+  ): Promise<boolean> {
+    if (this.#options.membership.canUseTransportAuthor === undefined) {
+      return transportAuthor === this.#options.transport.identity && equalBytes(signingId, this.identity)
+    }
+    return this.#options.membership.canUseTransportAuthor({
+      groupId: this.#options.groupId,
+      membershipRevision,
+      role,
+      signingId,
+      transportAuthor,
+      ...(validatorCapability === undefined ? {} : { validatorCapability }),
+    })
+  }
+  async #heartbeatAuthorized(context: {
+    readonly groupId: Uint8Array
+    readonly membershipRevision: Uint8Array
+    readonly validatorId: Uint8Array
+    readonly validatorCapability: Uint8Array
+  }): Promise<boolean> {
+    if (this.#options.membership.canHeartbeat !== undefined) {
+      return this.#options.membership.canHeartbeat(context)
+    }
+    if (!equalBytes(context.membershipRevision, this.#options.membershipRevision)) return false
+    return this.#options.membership.canValidate({
+      ...context,
+      validationPolicy: this.#options.validationPolicy,
+      writerId: context.validatorId,
+    })
+  }
+  async #isValidAdmissionProof(
+    candidate: StoredCandidate,
+    core: TransactionCore,
+    attestation: StoredAttestation,
+  ): Promise<boolean> {
+    if (
+      !equalBytes(attestation.txId, candidate.txId) ||
+      !equalBytes(attestation.candidateDigest, candidate.candidateDigest) ||
+      !equalBytes(attestation.membershipRevision, core.membershipRevision) ||
+      attestation.authorTimestampMs !== core.authorTimestampMs ||
+      attestation.authorTimestampMs <= attestation.acceptedAboveMs ||
+      attestation.policyVersion !== await this.#expectedPolicyVersion(core) ||
+      typeof attestation.transportAuthor !== 'string'
+    ) return false
+    const transportAuthorized = await this.#options.membership.canUseTransportAuthor?.({
+      groupId: core.groupId,
+      membershipRevision: core.membershipRevision,
+      role: 'validator',
+      signingId: attestation.validatorId,
+      transportAuthor: attestation.transportAuthor,
+      validatorCapability: attestation.validatorCapability,
+    }) ?? (
+      attestation.transportAuthor === this.#options.transport.identity &&
+      equalBytes(attestation.validatorId, this.identity)
+    )
+    if (!transportAuthorized) return false
+    return this.#options.membership.canValidate({
+      groupId: core.groupId,
+      membershipRevision: core.membershipRevision,
+      validationPolicy: core.validationPolicy,
+      writerId: core.authorId,
+      validatorId: attestation.validatorId,
+      validatorCapability: attestation.validatorCapability,
+    })
+  }
+  async #isFeedContiguous(record: TransportRecord): Promise<boolean> {
+    const status = await this.#options.transport.status()
+    const feed = status.feedStates?.find((candidate) => candidate.feedId === record.author)
+    if (feed === undefined || !/^(0|[1-9][0-9]*)$/.test(feed.contiguousThrough)) return false
+    return BigInt(feed.contiguousThrough) >= record.sequence
+  }
   #nextAuthorTimestamp(): bigint {
     const wallClock = BigInt(Math.max(0, Math.trunc(this.#clockNow())))
     return wallClock > this.#lastAuthoredTimestampMs ? wallClock : this.#lastAuthoredTimestampMs + 1n
@@ -654,4 +935,15 @@ export class ChronologNode {
     if (!this.#started) throw new Error('NODE_NOT_STARTED')
     if (this.#closed) throw new Error('NODE_CLOSED')
   }
+}
+
+class TerminalIngestError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options)
+    this.name = 'TerminalIngestError'
+  }
+}
+
+function invalid(code: string): never {
+  throw new TerminalIngestError(code)
 }

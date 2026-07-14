@@ -35,6 +35,22 @@ export interface CandidateAdmissionContext {
   readonly validatorCapability: Uint8Array
 }
 
+export interface ValidatorAuthorityContext {
+  readonly groupId: Uint8Array
+  readonly membershipRevision: Uint8Array
+  readonly validatorId: Uint8Array
+  readonly validatorCapability: Uint8Array
+}
+
+export interface TransportAuthorContext {
+  readonly groupId: Uint8Array
+  readonly membershipRevision: Uint8Array
+  readonly role: 'writer' | 'validator'
+  readonly signingId: Uint8Array
+  readonly transportAuthor: string
+  readonly validatorCapability?: Uint8Array
+}
+
 /**
  * Resolves authority at the transaction's pinned membership revision. It can be
  * backed by the in-log capability system, a central service, a chain, or a
@@ -44,6 +60,18 @@ export interface MembershipResolver {
   canWrite(context: Omit<CandidateAdmissionContext, 'validatorId' | 'validatorCapability'>): boolean | Promise<boolean>
   canValidate(context: CandidateAdmissionContext): boolean | Promise<boolean>
   threshold(context: Omit<CandidateAdmissionContext, 'validatorId' | 'validatorCapability'>): number | Promise<number>
+  /** Authorizes revision-scoped validator heartbeat evidence. */
+  canHeartbeat?(context: ValidatorAuthorityContext): boolean | Promise<boolean>
+  /**
+   * Binds an inner Chronolog signing key to an authenticated outer feed. When
+   * omitted, node-core permits only records authored by the local transport
+   * identity and signed by the local node identity.
+   */
+  canUseTransportAuthor?(context: TransportAuthorContext): boolean | Promise<boolean>
+  /** Resolves the version committed by attestations for a pinned policy. */
+  policyVersion?(
+    context: Omit<CandidateAdmissionContext, 'validatorId' | 'validatorCapability'>,
+  ): bigint | Promise<bigint>
   selectAdmission?(
     context: Omit<CandidateAdmissionContext, 'validatorId' | 'validatorCapability'>,
     attestations: readonly StoredAttestation[],
@@ -74,6 +102,8 @@ export interface ChronologNodeOptions {
   readonly clock?: Clock
   readonly random?: RandomSource
   readonly envelopeCipher?: EnvelopeCipher
+  /** Maximum transiently failed records retained before history-backed recovery takes over. */
+  readonly maximumRetryRecords?: number
 }
 
 export interface PublishTransactionInput {

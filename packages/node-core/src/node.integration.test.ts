@@ -37,6 +37,14 @@ describe('ChronologNode end-to-end', () => {
         equalBytes(validatorId, validator.publicKeyBytes) &&
         equalBytes(validatorCapability, capability),
       threshold: () => 1,
+      policyVersion: () => 1n,
+      canUseTransportAuthor: ({ role, signingId, transportAuthor }) =>
+        role === 'writer'
+          ? equalBytes(signingId, writer.publicKeyBytes) && transportAuthor === 'writer'
+          : equalBytes(signingId, validator.publicKeyBytes) && transportAuthor === 'validator',
+      canHeartbeat: ({ validatorId, validatorCapability }) =>
+        equalBytes(validatorId, validator.publicKeyBytes) &&
+        equalBytes(validatorCapability, capability),
     }
     const network = new MemoryTransportNetwork()
     const directory = await mkdtemp(join(tmpdir(), 'chronolog-node-integration-'))

@@ -8,23 +8,35 @@ import {
 import type { StoredAttestation, WatermarkPolicy } from '@chronolog/control-store'
 import { bytesToHex, equalBytes, type TransactionCore } from '@chronolog/protocol'
 
-import type { CandidateAdmissionContext, MembershipResolver } from './types.js'
+import type {
+  CandidateAdmissionContext,
+  MembershipResolver,
+  TransportAuthorContext,
+  ValidatorAuthorityContext,
+} from './types.js'
 
 export interface CapabilityMembershipResolverOptions {
   readonly snapshotForRevision: (
     revisionDigest: Uint8Array,
   ) => CapabilitySnapshot | null | Promise<CapabilitySnapshot | null>
   readonly maximumWatermarkValidators?: number
+  /** Recovery-controlled binding from a capability to its authenticated SSB feed. */
+  readonly transportAuthorForCapability?: (
+    capability: EffectiveCapability,
+    snapshot: CapabilitySnapshot,
+  ) => string | null | Promise<string | null>
 }
 
 /** Bridges the signed capability log to revision-pinned node authorization. */
 export class CapabilityMembershipResolver implements MembershipResolver {
   readonly #snapshots: CapabilityMembershipResolverOptions['snapshotForRevision']
   readonly #maximumWatermarkValidators: number
+  readonly #transportAuthorForCapability: CapabilityMembershipResolverOptions['transportAuthorForCapability']
 
   constructor(options: CapabilityMembershipResolverOptions) {
     this.#snapshots = options.snapshotForRevision
     this.#maximumWatermarkValidators = options.maximumWatermarkValidators ?? 20
+    this.#transportAuthorForCapability = options.transportAuthorForCapability
   }
 
   async canWrite(context: Omit<CandidateAdmissionContext, 'validatorId' | 'validatorCapability'>): Promise<boolean> {
@@ -51,6 +63,44 @@ export class CapabilityMembershipResolver implements MembershipResolver {
     return Number(policy.minimumValidators)
   }
 
+  async policyVersion(
+    context: Omit<CandidateAdmissionContext, 'validatorId' | 'validatorCapability'>,
+  ): Promise<bigint> {
+    const snapshot = await this.#snapshot(context)
+    return snapshot?.policies.get(bytesToHex(context.validationPolicy))?.policy.version ?? -1n
+  }
+
+  async canHeartbeat(context: ValidatorAuthorityContext): Promise<boolean> {
+    const snapshot = await this.#snapshot({ ...context, validationPolicy: new Uint8Array(), writerId: new Uint8Array() })
+    if (!snapshot) return false
+    const capability = snapshot.capabilities.get(bytesToHex(context.validatorCapability))
+    return capability !== undefined &&
+      this.#activeRole(capability, snapshot, 'validator') &&
+      equalBytes(capability.grant.signingPublicKey, context.validatorId)
+  }
+
+  async canUseTransportAuthor(context: TransportAuthorContext): Promise<boolean> {
+    if (!this.#transportAuthorForCapability) return false
+    const snapshot = await this.#snapshot({
+      groupId: context.groupId,
+      membershipRevision: context.membershipRevision,
+      validationPolicy: new Uint8Array(),
+      writerId: context.signingId,
+    })
+    if (!snapshot) return false
+    const capability = context.role === 'validator'
+      ? snapshot.capabilities.get(bytesToHex(context.validatorCapability ?? new Uint8Array()))
+      : [...snapshot.capabilities.values()].find((candidate) =>
+          this.#activeRole(candidate, snapshot, 'writer') &&
+          equalBytes(candidate.grant.signingPublicKey, context.signingId))
+    if (
+      capability === undefined ||
+      !this.#activeRole(capability, snapshot, context.role) ||
+      !equalBytes(capability.grant.signingPublicKey, context.signingId)
+    ) return false
+    return await this.#transportAuthorForCapability(capability, snapshot) === context.transportAuthor
+  }
+
   async selectAdmission(
     context: Omit<CandidateAdmissionContext, 'validatorId' | 'validatorCapability'>,
     attestations: readonly StoredAttestation[],
@@ -66,6 +116,7 @@ export class CapabilityMembershipResolver implements MembershipResolver {
         !this.#activeRole(capability, snapshot, 'validator') ||
         !equalBytes(capability.grant.signingPublicKey, attestation.validatorId) ||
         !equalBytes(attestation.membershipRevision, snapshot.revisionDigest) ||
+        attestation.policyVersion !== policy.version ||
         attestation.authorTimestampMs <= attestation.acceptedAboveMs ||
         attestation.authorTimestampMs <= (capability.grant.minimumAuthorTimestampMs ?? -1n)
       ) continue

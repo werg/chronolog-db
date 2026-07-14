@@ -3,6 +3,11 @@ import { createHash, randomBytes } from 'node:crypto'
 import { AsyncQueue } from './async-queue.js'
 import { cloneRecord, type ChronologTransport, type PublishOptions, type TransportRecord, type TransportStatus } from './types.js'
 
+interface MemorySubscriber {
+  readonly queue: AsyncQueue<TransportRecord>
+  readonly close: () => void
+}
+
 function recordId(
   author: string,
   sequence: bigint,
@@ -93,7 +98,7 @@ export class MemoryTransportNetwork {
 
 export class MemoryTransport implements ChronologTransport {
   readonly #records = new Map<string, TransportRecord>()
-  readonly #subscribers = new Set<AsyncQueue<TransportRecord>>()
+  readonly #subscribers = new Set<MemorySubscriber>()
   #sequence = 0n
   #previous: string | undefined
   #closed = false
@@ -139,28 +144,68 @@ export class MemoryTransport implements ChronologTransport {
     if (this.#closed || this.#records.has(input.id)) return
     const record = cloneRecord(input)
     this.#records.set(record.id, record)
-    for (const subscriber of this.#subscribers) subscriber.push(cloneRecord(record))
+    for (const subscriber of this.#subscribers) {
+      if (!subscriber.queue.push(cloneRecord(record))) subscriber.close()
+    }
   }
 
   subscribe(signal?: AbortSignal): AsyncIterable<TransportRecord> {
-    const queue = new AsyncQueue<TransportRecord>()
-    for (const record of this.localHistory()) queue.push(cloneRecord(record))
-    this.#subscribers.add(queue)
+    const queue = new AsyncQueue<TransportRecord>(4_096)
+    const existing = this.localHistory().map(cloneRecord)
     const abort = () => {
-      this.#subscribers.delete(queue)
+      signal?.removeEventListener('abort', abort)
+      this.#subscribers.delete(subscriber)
       queue.close()
     }
+    const subscriber: MemorySubscriber = { queue, close: abort }
+    this.#subscribers.add(subscriber)
     if (signal?.aborted) abort()
     else signal?.addEventListener('abort', abort, { once: true })
-    return queue
+    return {
+      async *[Symbol.asyncIterator]() {
+        try {
+          for (const record of existing) {
+            if (signal?.aborted) return
+            yield record
+          }
+          for await (const record of queue) yield record
+        } finally {
+          signal?.removeEventListener('abort', abort)
+          abort()
+        }
+      },
+    }
   }
 
   async status(): Promise<TransportStatus> {
+    const feeds = new Map<string, bigint[]>()
+    for (const record of this.#records.values()) {
+      const sequences = feeds.get(record.author) ?? []
+      sequences.push(record.sequence)
+      feeds.set(record.author, sequences)
+    }
+    const feedStates = [...feeds.entries()].map(([feedId, sequences]) => {
+      const unique = [...new Set(sequences)].sort((left, right) => left < right ? -1 : left > right ? 1 : 0)
+      const maximumSequence = unique.at(-1) ?? 0n
+      let contiguousThrough = 0n
+      for (const sequence of unique) {
+        if (sequence !== contiguousThrough + 1n) break
+        contiguousThrough = sequence
+      }
+      return {
+        feedId,
+        contiguousThrough: contiguousThrough.toString(10),
+        maximumSequence: maximumSequence.toString(10),
+        hasGaps: contiguousThrough !== maximumSequence,
+      }
+    }).sort((left, right) => left.feedId.localeCompare(right.feedId))
     return {
       identity: this.identity,
       records: this.#records.size,
       closed: this.#closed,
       peers: this.network.peers(this.identity),
+      feedStates,
+      feedsWithGaps: feedStates.filter((feed) => feed.hasGaps).length,
     }
   }
 

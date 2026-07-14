@@ -76,8 +76,15 @@ export async function prepareCluster(
     groupId,
     membershipRevision,
     validationPolicy,
-    writers: nodes.map((node) => node.publicKey),
-    validators: nodes.map((node) => ({ publicKey: node.publicKey, capability: node.validatorCapability })),
+    // Bind every inner protocol signer to its authenticated outer SSB feed.
+    // Without this mapping, copying a valid signed message into another feed
+    // would erase the provenance that the replication layer authenticated.
+    writers: nodes.map((node) => ({ publicKey: node.publicKey, transportAuthor: node.ssb.id })),
+    validators: nodes.map((node) => ({
+      publicKey: node.publicKey,
+      capability: node.validatorCapability,
+      transportAuthor: node.ssb.id,
+    })),
     threshold: scenario.threshold,
     watermarkThreshold: scenario.threshold,
   }

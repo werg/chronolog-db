@@ -15,6 +15,7 @@ import type {
   StoredCandidate,
   StoredCheckpoint,
   ValidatorHeartbeat,
+  ValidatorCutoffState,
   WatermarkEvidence,
   WatermarkPolicy,
 } from './types.js'
@@ -37,29 +38,86 @@ export class ControlStoreConflictError extends Error {
 export class ControlStore {
   readonly #persistence: ControlStorePersistence | null
   #sequence = 0n
+  #deltaFloor = 0n
+  readonly #maximumRetainedDeltas: number
   readonly #candidates = new Map<string, StoredCandidate>()
   readonly #attestations = new Map<string, StoredAttestation>()
   readonly #attestationsByTx = new Map<string, Set<string>>()
   readonly #heartbeats = new Map<string, ValidatorHeartbeat>()
+  readonly #validatorCutoffs = new Map<string, bigint>()
   readonly #orderedTxIds: Uint8Array[] = []
   readonly #deltas: ControlStoreDelta[] = []
   readonly #checkpoints = new Map<number, StoredCheckpoint>()
   readonly #historyReopenings = new Map<string, HistoryReopening>()
   #materializedHead: MaterializedHead | null = null
 
-  constructor(persistence: ControlStorePersistence | null = null) {
+  constructor(
+    persistence: ControlStorePersistence | null = null,
+    options: { readonly maximumRetainedDeltas?: number } = {},
+  ) {
     this.#persistence = persistence
+    this.#maximumRetainedDeltas = options.maximumRetainedDeltas ?? 2_048
+    if (!Number.isSafeInteger(this.#maximumRetainedDeltas) || this.#maximumRetainedDeltas < 1) {
+      throw new RangeError('CONTROL_STORE_INVALID_DELTA_RETENTION')
+    }
+    const journalCutoffs = persistence?.loadValidatorCutoffs?.() ?? null
     const snapshot = persistence?.load()
-    if (snapshot !== null && snapshot !== undefined) this.#restore(snapshot)
+    if (snapshot !== null && snapshot !== undefined) {
+      try {
+        this.#restore(snapshot)
+      } catch (error) {
+        if (persistence?.recoverCorruptSnapshot?.(error) !== true) throw error
+        this.#reset()
+      }
+    }
+    for (const cutoff of journalCutoffs ?? []) this.#mergeValidatorCutoff(cutoff)
+    persistence?.initializeValidatorCutoffs?.(this.#listValidatorCutoffs())
   }
 
   get sequence(): bigint {
     return this.#sequence
   }
 
+  /** Sequences at or below this floor require a fresh snapshot. */
+  get deltaFloor(): bigint {
+    return this.#deltaFloor
+  }
+
   /** Flushes a coalesced rebuildable snapshot at graceful durability points. */
   flush(): void {
     this.#persistence?.flush?.()
+  }
+
+  validatorCutoff(validatorId: Uint8Array): bigint | null {
+    return this.#validatorCutoffs.get(idKey(validatorId)) ?? null
+  }
+
+  /**
+   * Durably advances validator signing state before the corresponding signed
+   * feed record is published. This deliberately bypasses coalesced snapshot
+   * persistence: losing this value could let a restarted validator sign below
+   * a cutoff it had already announced.
+   */
+  persistValidatorCutoff(validatorId: Uint8Array, acceptedAboveMs: bigint): void {
+    const key = idKey(validatorId)
+    const previous = this.#validatorCutoffs.get(key)
+    if (previous !== undefined && acceptedAboveMs < previous) {
+      throw new ControlStoreConflictError('CONTROL_STORE_VALIDATOR_CUTOFF_REGRESSION')
+    }
+    if (previous === acceptedAboveMs) return
+    if (this.#persistence?.saveValidatorCutoff !== undefined) {
+      this.#persistence.saveValidatorCutoff({ validatorId, acceptedAboveMs })
+      this.#validatorCutoffs.set(key, acceptedAboveMs)
+      return
+    }
+    this.#validatorCutoffs.set(key, acceptedAboveMs)
+    try {
+      this.#persistence?.save(this.snapshot())
+    } catch (error) {
+      if (previous === undefined) this.#validatorCutoffs.delete(key)
+      else this.#validatorCutoffs.set(key, previous)
+      throw error
+    }
   }
 
   putCandidate(input: PutCandidateInput): { added: boolean; deltas: readonly ControlStoreDelta[] } {
@@ -222,7 +280,7 @@ export class ControlStore {
   }
 
   recordHeartbeat(heartbeat: ValidatorHeartbeat): ControlStoreDelta | null {
-    const validatorKey = idKey(heartbeat.validatorId)
+    const validatorKey = heartbeatKey(heartbeat.membershipRevision, heartbeat.validatorId)
     const next = cloneHeartbeat(heartbeat)
     const previous = this.#heartbeats.get(validatorKey)
     if (previous !== undefined) {
@@ -255,8 +313,8 @@ export class ControlStore {
     return clone(delta)
   }
 
-  watermark(policy: WatermarkPolicy): WatermarkEvidence {
-    if (policy.kind === 'threshold') return this.#thresholdWatermark(policy)
+  watermark(policy: WatermarkPolicy, membershipRevision?: Uint8Array): WatermarkEvidence {
+    if (policy.kind === 'threshold') return this.#thresholdWatermark(policy, membershipRevision)
     const proofs = policy.minimalProofs
     if (proofs.length === 0 || proofs.some((proof) => proof.length === 0)) {
       return {
@@ -273,7 +331,7 @@ export class ControlStore {
     for (const proof of proofs) {
       let best: ValidatorHeartbeat | null = null
       for (const validatorId of proof) {
-        const heartbeat = this.#heartbeats.get(idKey(validatorId))
+        const heartbeat = this.#heartbeatFor(validatorId, membershipRevision)
         if (
           heartbeat?.feedContiguous === true &&
           (best === null || heartbeat.acceptanceCutoffMs > best.acceptanceCutoffMs)
@@ -308,6 +366,7 @@ export class ControlStore {
 
   #thresholdWatermark(
     policy: Extract<WatermarkPolicy, { kind: 'threshold' }>,
+    membershipRevision?: Uint8Array,
   ): WatermarkEvidence {
     if (
       !Number.isSafeInteger(policy.threshold) ||
@@ -325,7 +384,7 @@ export class ControlStore {
     }
 
     const heartbeats = policy.validatorIds.map((validatorId) => {
-      const heartbeat = this.#heartbeats.get(idKey(validatorId))
+      const heartbeat = this.#heartbeatFor(validatorId, membershipRevision)
       return heartbeat?.feedContiguous === true ? heartbeat : null
     })
     const available = heartbeats
@@ -362,9 +421,13 @@ export class ControlStore {
     }
   }
 
-  settlementEvidence(txId: Uint8Array, policy: WatermarkPolicy): SettlementEvidence {
+  settlementEvidence(
+    txId: Uint8Array,
+    policy: WatermarkPolicy,
+    membershipRevision?: Uint8Array,
+  ): SettlementEvidence {
     const candidate = this.#requiredCandidate(txId)
-    const watermark = this.watermark(policy)
+    const watermark = this.watermark(policy, membershipRevision)
     const unresolved = this.#unresolvedAttestations()
     const historyReopenings = [...this.#historyReopenings.values()]
       .filter((event) => event.floorMs <= candidate.orderKey.authorTimestampMs)
@@ -451,6 +514,9 @@ export class ControlStore {
   }
 
   changesSince(sequence: bigint): readonly ControlStoreDelta[] {
+    if (sequence < this.#deltaFloor) {
+      throw new ControlStoreConflictError('CONTROL_STORE_DELTA_HISTORY_RESET')
+    }
     return this.#deltas.filter((delta) => delta.sequence > sequence).map(clone)
   }
 
@@ -463,9 +529,14 @@ export class ControlStore {
       heartbeats: [...this.#heartbeats.values()].map(cloneHeartbeat),
       orderedTxIds: this.orderedTransactionIds(),
       deltas: this.#deltas.map(clone),
+      deltaFloor: this.#deltaFloor,
       materializedHead: this.materializedHead(),
       checkpoints: [...this.#checkpoints.values()].map(clone),
       historyReopenings: [...this.#historyReopenings.values()].map(clone),
+      validatorCutoffs: [...this.#validatorCutoffs.entries()].map(([key, acceptedAboveMs]) => ({
+        validatorId: Uint8Array.from(Buffer.from(key, 'base64url')),
+        acceptedAboveMs,
+      })),
     }
   }
 
@@ -504,6 +575,7 @@ export class ControlStore {
     this.#sequence += 1n
     const sequenced = clone({ ...delta, sequence: this.#sequence })
     this.#deltas.push(sequenced)
+    this.#trimDeltas()
     return sequenced
   }
 
@@ -523,6 +595,7 @@ export class ControlStore {
 
   #restore(snapshot: ControlStoreSnapshot): void {
     this.#sequence = snapshot.sequence
+    this.#deltaFloor = snapshot.deltaFloor ?? 0n
     for (const candidate of snapshot.candidates) {
       this.#candidates.set(idKey(candidate.txId), cloneCandidate(candidate))
     }
@@ -536,10 +609,14 @@ export class ControlStore {
       this.#attestationsByTx.set(txKey, refs)
     }
     for (const heartbeat of snapshot.heartbeats) {
-      this.#heartbeats.set(idKey(heartbeat.validatorId), cloneHeartbeat(heartbeat))
+      this.#heartbeats.set(heartbeatKey(heartbeat.membershipRevision, heartbeat.validatorId), cloneHeartbeat(heartbeat))
+    }
+    for (const cutoff of snapshot.validatorCutoffs ?? []) {
+      this.#validatorCutoffs.set(idKey(cutoff.validatorId), cutoff.acceptedAboveMs)
     }
     this.#orderedTxIds.push(...snapshot.orderedTxIds.map(copyBytes))
     this.#deltas.push(...snapshot.deltas.map(clone))
+    this.#trimDeltas()
     this.#materializedHead = snapshot.materializedHead === null ? null : clone(snapshot.materializedHead)
     for (const checkpoint of snapshot.checkpoints) {
       this.#checkpoints.set(checkpoint.prefixLength, clone(checkpoint))
@@ -553,6 +630,12 @@ export class ControlStore {
   #verifyRestoredOrder(): void {
     if (this.#deltas.length > 0 && this.#deltas.at(-1)?.sequence !== this.#sequence) {
       throw new ControlStoreConflictError('CONTROL_STORE_CORRUPT_DELTA_SEQUENCE')
+    }
+    if (this.#deltas.length > 0 && this.#deltas[0]!.sequence !== this.#deltaFloor + 1n) {
+      throw new ControlStoreConflictError('CONTROL_STORE_CORRUPT_DELTA_FLOOR')
+    }
+    if (this.#deltas.length === 0 && this.#deltaFloor !== this.#sequence) {
+      throw new ControlStoreConflictError('CONTROL_STORE_CORRUPT_DELTA_FLOOR')
     }
     for (let index = 1; index < this.#deltas.length; index += 1) {
       if (this.#deltas[index]!.sequence <= this.#deltas[index - 1]!.sequence) {
@@ -574,6 +657,60 @@ export class ControlStore {
       }
       previous = candidate
     }
+  }
+
+  #heartbeatFor(
+    validatorId: Uint8Array,
+    membershipRevision?: Uint8Array,
+  ): ValidatorHeartbeat | undefined {
+    if (membershipRevision !== undefined) {
+      return this.#heartbeats.get(heartbeatKey(membershipRevision, validatorId))
+    }
+    let latest: ValidatorHeartbeat | undefined
+    for (const heartbeat of this.#heartbeats.values()) {
+      if (
+        bytesEqual(heartbeat.validatorId, validatorId) &&
+        (latest === undefined || heartbeat.validatorFeedSequence > latest.validatorFeedSequence)
+      ) latest = heartbeat
+    }
+    return latest
+  }
+
+  #trimDeltas(): void {
+    const excess = this.#deltas.length - this.#maximumRetainedDeltas
+    if (excess <= 0) return
+    const removed = this.#deltas.splice(0, excess)
+    this.#deltaFloor = removed.at(-1)!.sequence
+  }
+
+  #reset(): void {
+    this.#sequence = 0n
+    this.#deltaFloor = 0n
+    this.#candidates.clear()
+    this.#attestations.clear()
+    this.#attestationsByTx.clear()
+    this.#heartbeats.clear()
+    this.#validatorCutoffs.clear()
+    this.#orderedTxIds.splice(0)
+    this.#deltas.splice(0)
+    this.#checkpoints.clear()
+    this.#historyReopenings.clear()
+    this.#materializedHead = null
+  }
+
+  #mergeValidatorCutoff(cutoff: ValidatorCutoffState): void {
+    const key = idKey(cutoff.validatorId)
+    const previous = this.#validatorCutoffs.get(key)
+    if (previous === undefined || cutoff.acceptedAboveMs > previous) {
+      this.#validatorCutoffs.set(key, cutoff.acceptedAboveMs)
+    }
+  }
+
+  #listValidatorCutoffs(): ValidatorCutoffState[] {
+    return [...this.#validatorCutoffs.entries()].map(([key, acceptedAboveMs]) => ({
+      validatorId: Uint8Array.from(Buffer.from(key, 'base64url')),
+      acceptedAboveMs,
+    }))
   }
 }
 
@@ -599,6 +736,10 @@ function validateStateTransition(previous: CandidateState, next: CandidateState)
 
 function idKey(value: Uint8Array): string {
   return Buffer.from(value).toString('base64url')
+}
+
+function heartbeatKey(membershipRevision: Uint8Array, validatorId: Uint8Array): string {
+  return `${idKey(membershipRevision)}:${idKey(validatorId)}`
 }
 
 function copyBytes(value: Uint8Array): Uint8Array {

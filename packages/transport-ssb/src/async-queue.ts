@@ -7,11 +7,22 @@ export class AsyncQueue<T> implements AsyncIterable<T> {
   #closed = false
   #error: unknown
 
-  push(value: T): void {
-    if (this.#closed) return
+  constructor(readonly maximumBufferedValues = 1_024) {
+    if (!Number.isSafeInteger(maximumBufferedValues) || maximumBufferedValues < 1) {
+      throw new Error('ASYNC_QUEUE_INVALID_CAPACITY')
+    }
+  }
+
+  push(value: T): boolean {
+    if (this.#closed) return false
     const waiter = this.#waiters.shift()
     if (waiter) waiter.resolve({ value, done: false })
-    else this.#values.push(value)
+    else if (this.#values.length < this.maximumBufferedValues) this.#values.push(value)
+    else {
+      this.fail(new Error('ASYNC_QUEUE_OVERFLOW'))
+      return false
+    }
+    return true
   }
 
   close(): void {
@@ -26,6 +37,7 @@ export class AsyncQueue<T> implements AsyncIterable<T> {
     if (this.#closed) return
     this.#closed = true
     this.#error = error
+    this.#values.splice(0)
     for (const waiter of this.#waiters.splice(0)) waiter.reject(error)
   }
 

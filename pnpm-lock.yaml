@@ -300,6 +300,9 @@ importers:
       '@chronolog/protocol':
         specifier: workspace:*
         version: link:../protocol
+      proper-lockfile:
+        specifier: 4.1.2
+        version: 4.1.2
       secret-stack:
         specifier: 6.4.1
         version: 6.4.1

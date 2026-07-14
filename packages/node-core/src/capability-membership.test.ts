@@ -38,11 +38,22 @@ describe('CapabilityMembershipResolver', () => {
       policies: new Map([[bytesToHex(policyId), { id: policyId, policy, installedAtRevision: 1n }]]),
       historyReopened: false,
     }
-    const resolver = new CapabilityMembershipResolver({ snapshotForRevision: () => snapshot })
+    const resolver = new CapabilityMembershipResolver({
+      snapshotForRevision: () => snapshot,
+      transportAuthorForCapability: (capability) => `@feed-${capability.id[0]}.ed25519`,
+    })
     const context = { groupId, membershipRevision: revisionDigest, validationPolicy: policyId, writerId: writer.grant.signingPublicKey }
     const attestations = [attestation(validatorA, 1), attestation(validatorB, 2)]
 
     expect(await resolver.canWrite(context)).toBe(true)
+    expect(await resolver.policyVersion(context)).toBe(1n)
+    expect(await resolver.canUseTransportAuthor({
+      groupId,
+      membershipRevision: revisionDigest,
+      role: 'writer',
+      signingId: writer.grant.signingPublicKey,
+      transportAuthor: '@feed-1.ed25519',
+    })).toBe(true)
     expect(await resolver.selectAdmission(context, attestations)).toEqual(attestations)
     const ir = new IrBuilder()
     const assertion = ir.query(
@@ -94,5 +105,7 @@ function attestation(capability: EffectiveCapability, id: number): StoredAttesta
     validatorFeedSequence: BigInt(id),
     authorTimestampMs: 100n,
     acceptedAboveMs: 50n,
+    policyVersion: 1n,
+    transportAuthor: `@feed-${capability.id[0]}.ed25519`,
   }
 }

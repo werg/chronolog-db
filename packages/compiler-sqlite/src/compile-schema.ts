@@ -9,12 +9,12 @@ import type {
 } from '@chronolog/ir'
 
 import { Catalog } from './catalog.js'
-import { quoteIdentifier, storageType, valueTypeOf } from './render.js'
+import { collationSql, quoteIdentifier, storageType, valueTypeOf } from './render.js'
 import { CompilerError, type CompiledSchema, type SchemaStatement } from './types.js'
 import type { ExecutionManifest } from '@chronolog/ir'
 import { assertValidExecutionManifest, assertValidSchemaManifest } from '@chronolog/ir'
-import { canonicalJsonToText } from '@chronolog/ir'
-import { assertDecimalPrecision, decimalRescale, formatDecimal } from '@chronolog/kernels'
+import { canonicalJsonToText, sqliteIdentifierEquals } from '@chronolog/ir'
+import { assertDecimalPrecision, decimalRescale, formatDecimal } from '@chronolog/kernels/decimal'
 
 export function compileSchema(schema: SchemaManifest, executionManifest: ExecutionManifest): CompiledSchema {
   assertValidSchemaManifest(schema)
@@ -55,7 +55,7 @@ export function compileSchema(schema: SchemaManifest, executionManifest: Executi
 
 function renderTable(table: SchemaTable, catalog: Catalog): string {
   const columns = [...table.columns].sort((left, right) => left.declarationOrder - right.declarationOrder || left.id - right.id)
-  const definitions = columns.map((column) => renderColumn(column))
+  const definitions = columns.map((column) => renderColumn(column, catalog))
   for (const constraint of [...table.constraints].sort((left, right) => left.id - right.id)) {
     definitions.push(renderConstraint(table, constraint, catalog))
   }
@@ -63,9 +63,12 @@ function renderTable(table: SchemaTable, catalog: Catalog): string {
   return `CREATE TABLE ${quoteIdentifier(table.name)} (${definitions.join(', ')})${options}`
 }
 
-function renderColumn(column: SchemaColumn): string {
+function renderColumn(column: SchemaColumn, catalog: Catalog): string {
   const type = storageType(column.valueType.logical)
   const parts = [quoteIdentifier(column.name), type]
+  if (column.valueType.logical.kind === 'text' && column.valueType.logical.collation !== 'binary') {
+    parts.push(`COLLATE ${collationSql(column.valueType.logical.collation, catalog)}`)
+  }
   if (!column.valueType.nullable) parts.push('NOT NULL')
   if (column.defaultValue !== undefined) {
     assertAssignable(column, column.defaultValue)
@@ -108,11 +111,11 @@ function renderIndex(index: SchemaIndex, catalog: Catalog): string {
   return `CREATE ${index.unique ? 'UNIQUE ' : ''}INDEX ${quoteIdentifier(index.name)} ON ${quoteIdentifier(table.name)} (${expressions})${where}`
 }
 
-function renderSchemaExpression(expression: Expr, table: SchemaTable, catalog: Catalog): string {
+export function renderSchemaExpression(expression: Expr, table: SchemaTable, catalog: Catalog): string {
   switch (expression.kind) {
     case 'literal': return renderSchemaLiteral(expression.value)
     case 'column': {
-      if (expression.relation !== undefined && expression.relation !== table.name) throw new CompilerError('SCHEMA_EXPRESSION_RELATION_INVALID', expression.id, 'schema')
+      if (expression.relation !== undefined && !sqliteIdentifierEquals(expression.relation, table.name)) throw new CompilerError('SCHEMA_EXPRESSION_RELATION_INVALID', expression.id, 'schema')
       return quoteIdentifier(catalog.column(table, expression.name).name)
     }
     case 'unary': {
@@ -134,6 +137,7 @@ function renderSchemaExpression(expression: Expr, table: SchemaTable, catalog: C
     case 'conditional': return `(CASE ${expression.branches.map((branch) =>
       `WHEN ${renderSchemaExpression(branch.when, table, catalog)} THEN ${renderSchemaExpression(branch.then, table, catalog)}`,
     ).join(' ')} ELSE ${renderSchemaExpression(expression.otherwise, table, catalog)} END)`
+    case 'collate': return `(${renderSchemaExpression(expression.expression, table, catalog)} COLLATE ${collationSql(expression.collation, catalog)})`
     default: throw new CompilerError('SCHEMA_EXPRESSION_UNSUPPORTED', expression.id, 'schema')
   }
 }
@@ -187,7 +191,7 @@ function assertCoreManifest(manifest: ExecutionManifest): void {
   if (manifest.features.fts || manifest.features.spatial || manifest.features.wasm) {
     throw new CompilerError('EXECUTION_FEATURE_UNSUPPORTED')
   }
-  if (manifest.functions.length > 0 || manifest.collations.length > 0 || manifest.modules.length > 0) {
+  if (manifest.functions.some((fn) => fn.effect !== 'pure') || manifest.modules.length > 0) {
     throw new CompilerError('EXECUTION_REGISTRY_UNSUPPORTED')
   }
   if (manifest.resources.maxQueryRows > 10_000 ||

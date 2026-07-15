@@ -69,6 +69,10 @@ describe('canonical schema binding generation', () => {
         },
         primaryKey: ["id"],
       })
+
+      export interface ChronologSqlReadDatabase {
+        readonly "items": ItemsRow
+      }
       "
     `)
   })
@@ -107,6 +111,7 @@ describe('canonical schema binding generation', () => {
       'readonly "count"?: bigint',
       'logicalType: { kind: "decimal", precision: 12, scale: 3 }',
       'primaryKey: ["count"]',
+      'readonly "measurements": MeasurementsRow',
     ]
     for (const fragment of required) expect(module.source).toContain(fragment)
   })

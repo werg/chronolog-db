@@ -16,7 +16,11 @@ import {
   type SchemaManifest,
   type TransactionProgram,
 } from '@chronolog/ir'
-import { DeterministicMaterializer, readNativeEngineInfo } from '@chronolog/materializer-doltlite'
+import {
+  DeterministicMaterializer,
+  createDoltLiteLegacyMaterializationRuntime,
+  readNativeEngineInfo,
+} from '@chronolog/materializer-doltlite'
 import { ChronologNode, type MembershipResolver } from '@chronolog/node-core'
 import { equalBytes, generateEd25519KeyPair } from '@chronolog/protocol'
 import { HttpRpcServer, HttpRpcTransport, InProcessRpcTransport, NodeRpcService } from '@chronolog/rpc'
@@ -44,7 +48,7 @@ describe('public client to replicated database', () => {
       validationPolicy: bytes32(3),
       identity,
       transport: network.createNode('local'),
-      materializer,
+      materialization: createDoltLiteLegacyMaterializationRuntime(materializer),
       membership,
       validator: { capabilityId: capability },
     })
@@ -101,7 +105,7 @@ describe('public client to replicated database', () => {
       validationPolicy: bytes32(6),
       identity,
       transport: network.createNode('mandatory'),
-      materializer,
+      materialization: createDoltLiteLegacyMaterializationRuntime(materializer),
       membership: selfMembership(identity.publicKeyBytes, capability),
       validator: { capabilityId: capability },
     })
@@ -144,7 +148,7 @@ describe('public client to replicated database', () => {
         validationPolicy,
         identity,
         transport,
-        materializer,
+        materialization: createDoltLiteLegacyMaterializationRuntime(materializer),
         membership,
         validator: { capabilityId: capability, cutoffLagMs: Number.MAX_SAFE_INTEGER },
       })

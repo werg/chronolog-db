@@ -4,7 +4,11 @@ import { join, resolve } from 'node:path'
 import { createCoreExecutionManifest } from '@chronolog/compiler-sqlite'
 import { ControlStore, JsonFileControlStorePersistence } from '@chronolog/control-store'
 import { decodeSchemaManifest, encodeSchemaManifest, SchemaBuilder, type SchemaManifest } from '@chronolog/ir'
-import { DeterministicMaterializer, readNativeEngineInfo } from '@chronolog/materializer-doltlite'
+import {
+  DeterministicMaterializer,
+  createDoltLiteLegacyMaterializationRuntime,
+  readNativeEngineInfo,
+} from '@chronolog/materializer-doltlite'
 import { ChronologNode, createEpochEnvelopeCipher, type MembershipResolver } from '@chronolog/node-core'
 import { equalBytes } from '@chronolog/protocol'
 import { HttpRpcServer, NodeRpcService } from '@chronolog/rpc'
@@ -124,7 +128,7 @@ async function startRuntime() {
       validationPolicy,
       identity,
       transport,
-      materializer,
+      materialization: createDoltLiteLegacyMaterializationRuntime(materializer),
       controlStore: new ControlStore(new JsonFileControlStorePersistence(join(dataDirectory, 'control.json'))),
       membership,
       validator: {

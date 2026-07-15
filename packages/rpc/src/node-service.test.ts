@@ -1,10 +1,30 @@
-import { encodeLogicalValues, encodeMutation, encodeQuery, type CanonicalQueryResult as IrResult, type Mutation, type Query } from '@chronolog/ir'
-import { RevisionBroadcaster, type ChronologNode, type NodeRevisionEvent } from '@chronolog/node-core'
+import {
+  encodeLogicalValues,
+  encodeMutation,
+  encodeQuery,
+  type CanonicalQueryResult as IrResult,
+  type Mutation,
+  type Query,
+  type TransactionProgram,
+} from '@chronolog/ir'
 import { describe, expect, it, vi } from 'vitest'
 
 import type { RpcCallContext } from './contract.js'
-import { NodeRpcService, type NodeRpcIrBackend } from './node-service.js'
-import type { AddAssertionIrRequest, AddMutationIrRequest, BeginDraftResponse } from './types.js'
+import { AsyncQueue } from './async-queue.js'
+import {
+  NodeRpcService,
+  type ChronologRpcNodeService,
+  type NodeRpcIrBackend,
+  type RpcNodeCandidate,
+  type RpcNodeCandidateCore,
+  type RpcNodeSettlementEvidence,
+} from './node-service.js'
+import type {
+  AddAssertionIrRequest,
+  AddMutationIrRequest,
+  BeginDraftResponse,
+  LocalSqlValue,
+} from './types.js'
 
 const groupId = 'AQ'
 const schemaDigest = Uint8Array.of(11)
@@ -53,7 +73,32 @@ function result(changed = false): IrResult {
   }
 }
 
-class FakeNode {
+interface TestNodeRevisionEvent {
+  readonly revision: bigint
+  readonly reason: string
+}
+
+class TestBroadcaster<T> {
+  readonly #queues = new Set<AsyncQueue<T>>()
+
+  emit(value: T): void {
+    for (const queue of this.#queues) queue.push(value)
+  }
+
+  subscribe(signal?: AbortSignal): AsyncIterable<T> {
+    const queue = new AsyncQueue<T>()
+    this.#queues.add(queue)
+    const close = () => {
+      queue.close()
+      this.#queues.delete(queue)
+    }
+    if (signal?.aborted) close()
+    else signal?.addEventListener('abort', close, { once: true })
+    return queue
+  }
+}
+
+class FakeNode implements ChronologRpcNodeService {
   readonly groupId = Uint8Array.of(1)
   readonly identity = Uint8Array.of(2)
   readonly membershipRevision = Uint8Array.of(3)
@@ -70,16 +115,16 @@ class FakeNode {
   }
   readonly schemaDigest = schemaDigest
   readonly executionManifestDigest = manifestDigest
-  readonly #events = new RevisionBroadcaster<NodeRevisionEvent>()
+  readonly #events = new TestBroadcaster<TestNodeRevisionEvent>()
   backend: FakeBackend | undefined
   revision = 1n
   materializedRevision = 1n
   orderLength = 1
   reserveCount = 0
-  candidateValue: unknown = null
-  candidateCoreValue: unknown = null
+  candidateValue: RpcNodeCandidate | null = null
+  candidateCoreValue: RpcNodeCandidateCore | null = null
   outcomeValue: unknown = null
-  settlementEvidenceValue: unknown = null
+  settlementEvidenceValue: RpcNodeSettlementEvidence | null = null
   processedTransportRecords = 0
   transportStatus: {
     records: number
@@ -89,9 +134,21 @@ class FakeNode {
     feedStates?: readonly { readonly feedId: string; readonly contiguousThrough: string; readonly maximumSequence: string; readonly hasGaps: boolean }[]
     lastCatchUpError?: string
   } = { records: 0, closed: false, peers: [] }
-  readonly publish = vi.fn(async (input: { program: unknown; authorTimestampMs: bigint; nonce: Uint8Array }) => {
-    const core = { authorTimestampMs: input.authorTimestampMs, nonce: Uint8Array.from(input.nonce), program: input.program }
-    this.candidateCoreValue = core
+  readonly publish = vi.fn(async (input: {
+    program: TransactionProgram
+    authorTimestampMs: bigint
+    nonce: Uint8Array
+  }) => {
+    const core = {
+      authorTimestampMs: input.authorTimestampMs,
+      nonce: Uint8Array.from(input.nonce),
+      program: input.program,
+    }
+    this.candidateCoreValue = {
+      ...core,
+      validationPolicy: this.validationPolicy,
+      membershipRevision: this.membershipRevision,
+    }
     return {
       txId: new TextEncoder().encode('tx-1'),
       txIdText: 'tx-1',
@@ -122,13 +179,18 @@ class FakeNode {
   outcome() { return this.outcomeValue }
   outcomeChangedByReplay() { return false }
   async settlementEvidence() { return this.settlementEvidenceValue }
+  async watermark() { return null }
 
   queryIr(query: Query, options?: { readonly atRevision?: bigint; readonly context?: Parameters<FakeBackend['query']>[1]['context'] }) {
     if (this.backend === undefined) throw new Error('missing fake backend')
     return this.backend.query(query, { atRevision: options?.atRevision ?? this.backend.revision, context: options?.context })
   }
 
-  localSql(sql: string, parameters: readonly unknown[], options?: { readonly atRevision?: bigint }) {
+  localSql(
+    sql: string,
+    parameters: readonly LocalSqlValue[] = [],
+    options?: { readonly atRevision?: bigint },
+  ) {
     if (this.backend === undefined) throw new Error('missing fake backend')
     return this.backend.localQuery(sql, parameters, { atRevision: options?.atRevision ?? this.backend.revision })
   }
@@ -143,8 +205,8 @@ class FakeNode {
     return this.backend.validateMutation(mutation)
   }
 
-  events(afterRevision = 0n, signal?: AbortSignal): AsyncIterable<NodeRevisionEvent> {
-    const source = this.#events.subscribe(signal === undefined ? {} : { signal })
+  events(afterRevision = 0n, signal?: AbortSignal): AsyncIterable<TestNodeRevisionEvent> {
+    const source = this.#events.subscribe(signal)
     return {
       async *[Symbol.asyncIterator]() {
         for await (const event of source) if (event.revision > afterRevision) yield event
@@ -214,7 +276,7 @@ function fixture(options: {
   node.backend = backend
   let id = 0
   const service = new NodeRpcService({
-    node: node as unknown as ChronologNode,
+    node,
     irBackend: backend,
     id: () => `opaque-${++id}`,
     ...(options.now === undefined ? {} : { now: options.now }),
@@ -413,13 +475,13 @@ describe('NodeRpcService canonical drafts', () => {
     expect(backend.queryCount).toBe(0)
   })
 
-  it('uses the node IR backend by default, binds named Int64 parameters, and exposes only reserved draft context', async () => {
+  it('uses a narrow service contract by default, binds named Int64 parameters, and exposes only reserved draft context', async () => {
     const node = new FakeNode()
     const backend = new FakeBackend()
     node.backend = backend
     let id = 0
     const service = new NodeRpcService({
-      node: node as unknown as ChronologNode,
+      node,
       id: () => `direct-${++id}`,
     })
     await service.executeIr({

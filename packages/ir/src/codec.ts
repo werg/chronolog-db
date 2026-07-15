@@ -59,8 +59,10 @@ const KIND_TAG = new Map<string, number>([
   ['literal', IR_TAGS.exprLiteral], ['parameter', IR_TAGS.exprParameter], ['column', IR_TAGS.exprColumn],
   ['context', IR_TAGS.exprContext], ['old_new', IR_TAGS.exprOldNew], ['unary', IR_TAGS.exprUnary],
   ['binary', IR_TAGS.exprBinary], ['conditional', IR_TAGS.exprConditional], ['cast', IR_TAGS.exprCast],
-  ['function', IR_TAGS.exprFunction], ['scalar_subquery', IR_TAGS.exprScalarSubquery], ['exists', IR_TAGS.exprExists],
-  ['membership', IR_TAGS.exprMembership], ['entropy', IR_TAGS.exprEntropy],
+  ['builtin', IR_TAGS.exprBuiltinFunction], ['function', IR_TAGS.exprFunction], ['aggregate', IR_TAGS.exprAggregate], ['scalar_subquery', IR_TAGS.exprScalarSubquery], ['exists', IR_TAGS.exprExists],
+  ['membership', IR_TAGS.exprMembership], ['entropy', IR_TAGS.exprEntropy], ['row', IR_TAGS.exprRow],
+  ['window', IR_TAGS.exprWindow],
+  ['collate', IR_TAGS.exprCollate],
   ['insert', IR_TAGS.mutationInsert], ['update', IR_TAGS.mutationUpdate], ['delete', IR_TAGS.mutationDelete],
   ['upsert', IR_TAGS.mutationUpsert], ['merge', IR_TAGS.mutationMerge], ['stateful_call', IR_TAGS.mutationStatefulCall],
   ['assert', IR_TAGS.preconditionAssert], ['expect', IR_TAGS.preconditionExpect],
@@ -81,6 +83,8 @@ const NON_DISCRIMINATED_RECORD_TAGS = new Set<number>([
   IR_TAGS.schemaManifest, IR_TAGS.schemaColumn, IR_TAGS.seedRow, IR_TAGS.executionManifest,
   IR_TAGS.registeredFunction, IR_TAGS.registeredCollation, IR_TAGS.registeredModule,
   IR_TAGS.valueType, IR_TAGS.conditionalBranch, IR_TAGS.page, IR_TAGS.assignment,
+  IR_TAGS.windowSpecification, IR_TAGS.windowFrame, IR_TAGS.windowFrameBound,
+  IR_TAGS.upsertClause, IR_TAGS.upsertConstraintTarget, IR_TAGS.upsertIndexTarget,
   IR_TAGS.canonicalQueryResult, IR_TAGS.executionFeatures, IR_TAGS.semanticResourceLimits,
 ])
 
@@ -92,15 +96,20 @@ const TAG_FIELDS = new Map<number, readonly string[]>([
   [IR_TAGS.exprContext, ['id', 'field']],
   [IR_TAGS.exprOldNew, ['id', 'scope', 'column']],
   [IR_TAGS.exprUnary, ['id', 'operator', 'operand']],
-  [IR_TAGS.exprBinary, ['id', 'operator', 'left', 'right']],
+  [IR_TAGS.exprBinary, ['id', 'operator', 'left', 'right', 'escape']],
   [IR_TAGS.exprConditional, ['id', 'branches', 'otherwise']],
   [IR_TAGS.exprCast, ['id', 'value', 'target']],
+  [IR_TAGS.exprBuiltinFunction, ['id', 'name', 'args']],
   [IR_TAGS.exprFunction, ['id', 'functionId', 'args']],
-  [IR_TAGS.exprJson, ['id', 'operation', 'args', 'path']],
+  [IR_TAGS.exprAggregate, ['id', 'operation', 'value', 'distinct', 'filter', 'orderBy']],
+  [IR_TAGS.exprJson, ['id', 'operation', 'args', 'path', 'pathExpression']],
   [IR_TAGS.exprScalarSubquery, ['id', 'query']],
   [IR_TAGS.exprExists, ['id', 'query', 'negated']],
   [IR_TAGS.exprMembership, ['id', 'value', 'values', 'query', 'negated']],
   [IR_TAGS.exprEntropy, ['id', 'label', 'index', 'length']],
+  [IR_TAGS.exprRow, ['id', 'items']],
+  [IR_TAGS.exprWindow, ['id', 'operation', 'args', 'filter', 'window']],
+  [IR_TAGS.exprCollate, ['id', 'expression', 'collation']],
   [IR_TAGS.valueType, ['logical', 'nullable']],
   [IR_TAGS.conditionalBranch, ['when', 'then']],
   [IR_TAGS.relationTable, ['id', 'name', 'alias']],
@@ -113,18 +122,21 @@ const TAG_FIELDS = new Map<number, readonly string[]>([
   [IR_TAGS.relationSpatial, ['id', 'indexId', 'predicate', 'alias']],
   [IR_TAGS.relationSystem, ['id', 'relation', 'alias']],
   [IR_TAGS.cte, ['id', 'name', 'query', 'materialized']],
-  [IR_TAGS.join, ['id', 'kind', 'relation', 'on']],
+  [IR_TAGS.join, ['id', 'kind', 'relation', 'on', 'using']],
   [IR_TAGS.projection, ['id', 'name', 'expression']],
   [IR_TAGS.orderTerm, ['id', 'expression', 'direction', 'nulls', 'canonicalRowTieBreaker']],
-  [IR_TAGS.window, ['id', 'name', 'partitionBy', 'orderBy']],
+  [IR_TAGS.window, ['id', 'name', 'partitionBy', 'orderBy', 'base', 'frame']],
+  [IR_TAGS.windowSpecification, ['base', 'partitionBy', 'orderBy', 'frame']],
+  [IR_TAGS.windowFrame, ['mode', 'start', 'end', 'exclude']],
+  [IR_TAGS.windowFrameBound, ['type', 'offset']],
   [IR_TAGS.compound, ['id', 'operator', 'query']],
   [IR_TAGS.page, ['limit', 'offset']],
-  [IR_TAGS.query, ['id', 'ctes', 'from', 'joins', 'where', 'groupBy', 'having', 'projection', 'windows', 'compounds', 'orderBy', 'page', 'resultMode']],
-  [IR_TAGS.mutationInsert, ['id', 'target', 'columns', 'rows', 'conflict', 'affectedRows', 'returning', 'label']],
-  [IR_TAGS.mutationUpdate, ['id', 'target', 'assignments', 'where', 'affectedRows', 'returning', 'label']],
-  [IR_TAGS.mutationDelete, ['id', 'target', 'where', 'affectedRows', 'returning', 'label']],
-  [IR_TAGS.mutationUpsert, ['id', 'target', 'columns', 'row', 'constraint', 'updates', 'affectedRows', 'returning', 'label']],
-  [IR_TAGS.mutationMerge, ['id', 'target', 'source', 'on', 'clauses', 'affectedRows', 'returning', 'label']],
+  [IR_TAGS.query, ['id', 'ctes', 'from', 'joins', 'where', 'groupBy', 'having', 'projection', 'windows', 'compounds', 'orderBy', 'page', 'resultMode', 'distinct', 'recursive']],
+  [IR_TAGS.mutationInsert, ['id', 'target', 'columns', 'rows', 'conflict', 'affectedRows', 'returning', 'label', 'alias', 'source', 'upsertClauses', 'ctes', 'recursive']],
+  [IR_TAGS.mutationUpdate, ['id', 'target', 'assignments', 'where', 'affectedRows', 'returning', 'label', 'alias', 'conflict', 'from', 'fromAlias', 'ctes', 'recursive']],
+  [IR_TAGS.mutationDelete, ['id', 'target', 'where', 'affectedRows', 'returning', 'label', 'alias', 'ctes', 'recursive']],
+  [IR_TAGS.mutationUpsert, ['id', 'target', 'columns', 'row', 'constraint', 'updates', 'affectedRows', 'returning', 'label', 'alias', 'where', 'source', 'ctes', 'recursive']],
+  [IR_TAGS.mutationMerge, ['id', 'target', 'source', 'on', 'clauses', 'affectedRows', 'returning', 'label', 'alias', 'ctes', 'recursive']],
   [IR_TAGS.mutationStatefulCall, ['id', 'moduleId', 'operationId', 'args', 'affectedRows', 'returning', 'label']],
   [IR_TAGS.mergeClause, ['id', 'when', 'predicate', 'action', 'assignments']],
   [IR_TAGS.affectedUnconstrained, []], [IR_TAGS.affectedExactly, ['count']],
@@ -132,6 +144,9 @@ const TAG_FIELDS = new Map<number, readonly string[]>([
   [IR_TAGS.affectedRange, ['minimum', 'maximum']],
   [IR_TAGS.objectReferenceName, ['name']], [IR_TAGS.objectReferenceId, ['objectId']],
   [IR_TAGS.assignment, ['column', 'value']],
+  [IR_TAGS.upsertClause, ['id', 'target', 'action', 'assignments', 'where']],
+  [IR_TAGS.upsertConstraintTarget, ['constraintId']],
+  [IR_TAGS.upsertIndexTarget, ['indexId']],
   [IR_TAGS.preconditionAssert, ['id', 'query', 'unknownIsFailure']],
   [IR_TAGS.preconditionExpect, ['id', 'query', 'expected']],
   [IR_TAGS.expectedInline, ['result']],
@@ -283,10 +298,19 @@ function tagFor(record: Record<string, unknown>): RecordTag | undefined {
   if ((kind === 'inner' || kind === 'left' || kind === 'cross') && 'relation' in record) return recordTag(IR_TAGS.join)
   if ('direction' in record && 'nulls' in record && 'expression' in record) return recordTag(IR_TAGS.orderTerm)
   if ('partitionBy' in record && 'orderBy' in record && 'name' in record) return recordTag(IR_TAGS.window)
+  if ('partitionBy' in record && 'orderBy' in record) return recordTag(IR_TAGS.windowSpecification)
+  if ('mode' in record && 'start' in record) return recordTag(IR_TAGS.windowFrame)
+  if ('type' in record && (record.type === 'current_row' || record.type === 'unbounded_preceding' ||
+      record.type === 'unbounded_following' || record.type === 'preceding' || record.type === 'following')) {
+    return recordTag(IR_TAGS.windowFrameBound)
+  }
   if ('operator' in record && 'query' in record && kind === undefined) return recordTag(IR_TAGS.compound)
   if ('limit' in record && kind === undefined && !('id' in record)) return recordTag(IR_TAGS.page)
   if ('expression' in record && 'name' in record && 'id' in record && kind === undefined) return recordTag(IR_TAGS.projection)
   if ('when' in record && 'action' in record && 'assignments' in record) return recordTag(IR_TAGS.mergeClause)
+  if ('action' in record && 'assignments' in record && 'id' in record && !('when' in record)) return recordTag(IR_TAGS.upsertClause)
+  if ('constraintId' in record && Object.keys(record).length === 1) return recordTag(IR_TAGS.upsertConstraintTarget)
+  if ('indexId' in record && Object.keys(record).length === 1) return recordTag(IR_TAGS.upsertIndexTarget)
   if ('column' in record && 'value' in record && kind === undefined && !('id' in record)) return recordTag(IR_TAGS.assignment)
   if (kind === 'name' && 'name' in record && !('id' in record)) return recordTag(IR_TAGS.objectReferenceName, true)
   if (kind === 'id' && 'objectId' in record && !('id' in record)) return recordTag(IR_TAGS.objectReferenceId, true)

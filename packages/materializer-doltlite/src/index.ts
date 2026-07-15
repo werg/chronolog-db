@@ -1,4 +1,6 @@
 export * from './materializer.js'
+export * from './legacy-runtime.js'
+export * from './portable.js'
 export {
   digestNativeEngineManifest,
   nativeEngineDescriptor,

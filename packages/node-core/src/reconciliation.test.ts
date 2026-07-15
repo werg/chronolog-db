@@ -1,5 +1,10 @@
 import { ControlStore } from '@chronolog/control-store'
 import { IrBuilder, values } from '@chronolog/ir'
+import type {
+  ChronologMaterializationRuntime,
+  MaterializedRevision,
+  MaterializedRevisionSnapshot,
+} from '@chronolog/materializer'
 import {
   encodeTransactionCore,
   equalBytes,
@@ -18,11 +23,10 @@ import type {
 import { describe, expect, it, vi } from 'vitest'
 
 import { ChronologNode } from './node.js'
-import type { ChronologNodeOptions } from './types.js'
 import { encodeSignedEnvelope } from './wire.js'
 
 describe('ChronologNode materializer reconciliation', () => {
-  it('repairs a derived materializer behind an already-admissible control order on startup', async () => {
+  it('composes a staged workerd coordinator with publication before exposing its query revision', async () => {
     const identity = await generateEd25519KeyPair()
     const groupId = bytes32(1)
     const membershipRevision = bytes32(2)
@@ -70,19 +74,93 @@ describe('ChronologNode materializer reconciliation', () => {
 
     let orderLength = 0
     let revision = 0n
+    const subscribers = new Set<(value: MaterializedRevisionSnapshot) => void>()
     const materialize = vi.fn(async (transactions: readonly unknown[]) => {
-      orderLength = transactions.length
-      revision += 1n
-      return null
+      const materialized: MaterializedRevision = {
+        revision: 1n,
+        previousRevision: 0n,
+        orderLength: transactions.length,
+        replayFromIndex: 0,
+        replayedTransactions: transactions.length,
+        checkpointPrefix: 0,
+        contentHash: 'workerd-candidate-1',
+        schemaDigest,
+        manifestDigest: executionManifestDigest,
+        earliestChangedOrderIndex: 0,
+        outcomeChanges: [],
+      }
+      return {
+        revision: materialized,
+        publication: {
+          publicationKey: 'workerd-execution-1',
+          expectedRevision: 0n,
+          targetRevision: 1n,
+          targetOrderLength: transactions.length,
+          candidateIdentity: 'workerd-candidate-1',
+        },
+      }
     })
-    const materializer = {
-      get revision() { return revision },
-      get orderLength() { return orderLength },
-      schemaDigest,
-      executionManifestDigest,
-      materialize,
+    const publish = vi.fn(async (request: {
+      readonly publicationKey: string
+      readonly expectedRevision: bigint
+      readonly targetRevision: bigint
+      readonly targetOrderLength: number
+    }) => {
+      expect(revision).toBe(request.expectedRevision)
+      revision = request.targetRevision
+      orderLength = request.targetOrderLength
+      for (const subscriber of subscribers) subscriber({
+        revision,
+        orderLength,
+        schemaDigest,
+        executionManifestDigest,
+      })
+      return {
+        status: 'published' as const,
+        publicationKey: request.publicationKey,
+        revision,
+        orderLength,
+        schemaDigest,
+        executionManifestDigest,
+      }
+    })
+    const reconcile = vi.fn(async (expectation: {
+      readonly targetOrderLength: number
+      readonly targetRevision?: bigint
+    }) => {
+      expect(orderLength).toBe(expectation.targetOrderLength)
+      expect(revision).toBe(expectation.targetRevision)
+      return {
+        status: 'reconciled' as const,
+        publicationKey: null,
+        revision,
+        orderLength,
+        schemaDigest,
+        executionManifestDigest,
+      }
+    })
+    const materialization: ChronologMaterializationRuntime = {
+      coordinator: { materialize },
+      queries: {
+        get revision() { return revision },
+        get orderLength() { return orderLength },
+        schemaDigest,
+        executionManifestDigest,
+        async queryIr() { throw new Error('TEST_QUERY_UNUSED') },
+        localSql() { throw new Error('TEST_QUERY_UNUSED') },
+        validateQuery() { return [] },
+        validateMutation() { return [] },
+        outcome() { return null },
+        subscribe(subscriber) {
+          subscribers.add(subscriber)
+          return () => subscribers.delete(subscriber)
+        },
+      },
+      publications: { publish, reconcile },
       close: vi.fn(),
-    } as unknown as ChronologNodeOptions['materializer']
+    }
+    const observed: bigint[] = []
+    materialization.queries.subscribe((value) => observed.push(value.revision))
     const transport = new StaticHistoryTransport(record)
     const node = new ChronologNode({
       groupId,
@@ -90,7 +168,7 @@ describe('ChronologNode materializer reconciliation', () => {
       validationPolicy,
       identity,
       transport,
-      materializer,
+      materialization,
       controlStore,
       membership: {
         canWrite: () => true,
@@ -104,7 +182,11 @@ describe('ChronologNode materializer reconciliation', () => {
     await node.start()
     expect(materialize).toHaveBeenCalledOnce()
     expect(materialize.mock.calls[0]?.[0]).toHaveLength(1)
+    expect(publish).toHaveBeenCalledOnce()
+    expect(reconcile).toHaveBeenCalledOnce()
     expect(node.orderLength).toBe(1)
+    expect(node.materializedRevision).toBe(1n)
+    expect(observed).toEqual([1n])
     await node.close()
   })
 })

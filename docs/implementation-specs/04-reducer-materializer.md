@@ -337,6 +337,14 @@ authorization. It may use broader presentation functions but cannot:
 - modify pragmas; or
 - be copied verbatim into a consensus precondition.
 
+Unlike consensus profiles, `local_read` does not reject clock, random,
+connection-state, JSON, math, aggregate, window, or other ordinary read-only
+SQLite functions for lack of replay determinism. It denies Dolt-control,
+dynamic-extension, write, schema, attachment, pragma, and reserved-object
+operations, and remains subject to statement, VM-step, row, and byte limits.
+Compiled query IR continues to execute under the consensus-precondition
+function allowlist even when invoked through a local observation endpoint.
+
 Consensus query IR has a separate entry point returning typed result modes.
 
 ## 17. Tests
@@ -370,4 +378,3 @@ Required materializer tests:
 - Clean and checkpoint replay yield identical state, outcomes, and derived
   logical digests.
 - Startup rejects rather than translates incompatible prototype state.
-

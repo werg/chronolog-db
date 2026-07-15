@@ -185,7 +185,9 @@ type Expr =
   | BinaryExpr
   | ConditionalExpr
   | CastExpr
+  | BuiltinFunctionExpr
   | FunctionExpr
+  | AggregateExpr
   | JsonExpr
   | ScalarSubqueryExpr
   | ExistsExpr
@@ -194,6 +196,17 @@ type Expr =
 
 Every variant contains `kind` and `id`. Operator names are closed enum values,
 not arbitrary strings. Function calls reference stable manifest function IDs.
+Pinned SQLite core calls use a separate closed-name `BuiltinFunctionExpr` with
+compiler-owned arity, argument, result, collation, and nullability rules. They
+do not require application schema registration and cannot be relabeled through
+an execution manifest. Registered extension calls remain `FunctionExpr`.
+Core aggregate nodes use the closed `count | min | max | every | any` operation
+enum, an optional value (`COUNT(*)` omits it), and an explicit `distinct` bit.
+`every` and `any` are the canonical Boolean operations behind standard
+`EVERY`/`ANY`/`SOME` and common `BOOL_AND`/`BOOL_OR` spellings. Aggregate calls
+are not represented as registered scalar functions. An optional typed Boolean
+`filter` expression represents standard `FILTER (WHERE ...)`; aggregate calls
+cannot be nested in its predicate.
 
 ### 5.2 Resolved nodes
 
@@ -272,16 +285,18 @@ type ResultMode =
 ```
 
 The resolver computes a typed output schema with stable projection IDs and
-names. Scalar mode requires one projected value. Ordered mode requires a
-provably total order. Multiset and set modes cause result rows to be encoded
-and sorted by canonical bytes by the execution layer.
+names. Scalar mode requires one projected value. For ordered mode, the compiler
+preserves authored terms and derives any missing canonical-row tie-breakers.
+Multiset and set modes cause result rows to be encoded and sorted by canonical
+bytes by the execution layer.
 
 ### 6.3 Ordering proof
 
-The ordering validator tracks candidate keys through relational operators.
-It accepts a total order only when the declared terms contain a non-null unique
-key for the final result or when the final canonical row encoding itself is an
-explicit tie-breaker.
+The ordering validator tracks candidate keys through relational operators and
+can use the final canonical projected row as a universal observable
+tie-breaker. Proof metadata is compiler-derived; applications never mark an
+order term as canonical. Authored terms remain first, so completion only
+chooses among rows whose order SQLite otherwise leaves unspecified.
 
 Proof metadata is derived, not signed:
 
@@ -293,8 +308,10 @@ interface OrderingProof {
 }
 ```
 
-`LIMIT`, `OFFSET`, order-sensitive windows, scalar subqueries with possible
-multiple rows, and ordered aggregates fail validation without a total order.
+`LIMIT`, `OFFSET`, scalar row choice, order-sensitive windows, and ordered
+aggregates trigger automatic completion. Validation fails only when the
+operation depends on intermediate row identity for which neither a candidate
+key nor canonical relational value can be derived.
 
 ### 6.4 Parameters
 
@@ -325,10 +342,25 @@ Every mutation includes:
 - optional returning query; and
 - optional application label.
 
+Target mutations may also carry a quoted SQL alias. Insert has exactly one
+source form: an explicit values-row array, a typed query source, or the
+canonical `columns: [], rows: [[]]` representation of `DEFAULT VALUES`. The
+query form is canonical IR, not caller-provided SQL. Upsert carries one values
+row or query source, a named unique constraint, an update list (empty means
+`DO NOTHING`), and an optional update predicate corresponding to SQLite's
+`DO UPDATE ... WHERE`. Update may carry a conflict policy and a named query
+source for deterministic `UPDATE ... FROM`.
+
 An insert never relies on positional table-column order. An upsert names a
 unique constraint. Update assignments are an ordered array, but default
 semantics evaluate right-hand expressions against the old row. Sequential
 assignment requires a distinct explicit node.
+
+For `INSERT ... SELECT`, the compiler makes source application order
+deterministic. It preserves authored ordering terms and completes ties with the
+entire projected logical row, including explicit null placement. This permits
+scalar, ordered, set, and multiset query sources without exposing SQLite's
+otherwise unspecified visitation order to conflict handling.
 
 Affected-row expectations are encoded closed variants. `unconstrained` is
 explicit and can be prohibited by an application policy.
@@ -386,8 +418,10 @@ order, and definitions for:
 - deterministic seed rows; and
 - semantic feature and resource settings.
 
-Schema object names follow the portable identifier grammar. The schema codec
-sorts definitions by numeric object ID, not JavaScript insertion order.
+Schema object names are nonempty, well-formed Unicode without NUL. All ordinary
+quoted SQL names are accepted; object and column collisions are detected using
+SQLite's ASCII-only case folding. The schema codec sorts definitions by numeric
+object ID, not JavaScript insertion order.
 
 Seed data is represented as explicit typed rows in primary-key order. It cannot
 contain transaction context, database queries, or entropy.
@@ -460,7 +494,9 @@ cap, but execution uses the first error under canonical priority.
 ### 12.1 Structural
 
 - Known tags and fields.
-- Valid identifier grammar.
+- Nonempty, well-formed identifier text without NUL.
+- SQLite-equivalent ASCII case-fold collision checks for schema objects and
+  columns.
 - Stable IDs unique within scope.
 - Bounded collections and nesting.
 - Required precondition and mutation counts.
@@ -487,7 +523,10 @@ cap, but execution uses the first error under canonical priority.
 
 Expressions are pure. Queries read only declared relations. Mutations write
 only their target and rule-declared effect set. Application IR cannot read or
-write `chronolog_`, `sqlite_`, or `dolt_` objects.
+write backend-internal main-database objects (`chronolog_`, `sqlite_`, `dolt_`,
+`doltlite_`, and `pragma_` namespaces or protected eponymous virtual tables).
+These restrictions do not apply to ordinary column, alias, projection, or
+constraint names.
 
 ### 12.5 Determinism checking
 
@@ -560,4 +599,3 @@ Required test groups:
 - No signed IR object contains SQL text or executable host callbacks.
 - The same schema and transaction objects encode byte-for-byte identically on
   every supported platform.
-

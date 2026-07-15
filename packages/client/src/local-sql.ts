@@ -3,11 +3,41 @@ import type { LocalSqlResult, LocalSqlValue } from '@chronolog/rpc'
 export type LocalSqlInput = null | bigint | number | string | Uint8Array | LocalSqlValue
 export type DecodedLocalSqlValue = null | bigint | number | string | Uint8Array
 
+/**
+ * Structural shape emitted by common SQL builders and ORMs after compilation.
+ * Chronolog intentionally does not depend on any one query-building library.
+ */
+export interface CompiledLocalSqlQuery {
+  readonly sql: string
+  readonly parameters?: readonly unknown[]
+}
+
 const MIN_INT64 = -(2n ** 63n)
 const MAX_INT64 = 2n ** 63n - 1n
 
-function isLocalSqlValue(value: LocalSqlInput): value is LocalSqlValue {
-  return typeof value === 'object' && value !== null && !ArrayBuffer.isView(value) && 'kind' in value
+function isLocalSqlValue(value: unknown): value is LocalSqlValue {
+  if (typeof value !== 'object' || value === null || ArrayBuffer.isView(value) || !('kind' in value)) return false
+  const tagged = value as { readonly kind?: unknown; readonly value?: unknown }
+  switch (tagged.kind) {
+    case 'null': return true
+    case 'integer': return typeof tagged.value === 'string'
+    case 'real': return typeof tagged.value === 'number'
+    case 'text': return typeof tagged.value === 'string'
+    case 'blob': return tagged.value instanceof Uint8Array
+    default: return false
+  }
+}
+
+function encodeUnknownLocalSqlValue(value: unknown): LocalSqlValue {
+  if (
+    value === null ||
+    typeof value === 'bigint' ||
+    typeof value === 'number' ||
+    typeof value === 'string' ||
+    value instanceof Uint8Array ||
+    isLocalSqlValue(value)
+  ) return encodeLocalSqlValue(value)
+  throw new TypeError('Local SQL parameters must be null, bigint, number, string, Uint8Array, or LocalSqlValue')
 }
 
 function integerValue(value: bigint | string): string {
@@ -37,6 +67,21 @@ export function encodeLocalSqlValue(value: LocalSqlInput): LocalSqlValue {
 
 export function encodeLocalSqlParameters(parameters: readonly LocalSqlInput[] = []): readonly LocalSqlValue[] {
   return parameters.map(encodeLocalSqlValue)
+}
+
+/** Normalizes an ORM/query-builder compiled query without introducing an ORM dependency. */
+export function encodeCompiledLocalSqlQuery(query: CompiledLocalSqlQuery): {
+  readonly sql: string
+  readonly parameters: readonly LocalSqlValue[]
+} {
+  if (typeof query.sql !== 'string') throw new TypeError('Compiled local SQL must contain a SQL string')
+  if (query.parameters !== undefined && !Array.isArray(query.parameters)) {
+    throw new TypeError('Compiled local SQL parameters must be an array')
+  }
+  return Object.freeze({
+    sql: query.sql,
+    parameters: Object.freeze((query.parameters ?? []).map(encodeUnknownLocalSqlValue)),
+  })
 }
 
 export function decodeLocalSqlValue(value: LocalSqlValue): DecodedLocalSqlValue {

@@ -41,10 +41,22 @@ describe('IrBuilder expressions and relational queries', () => {
       builder.cast(builder.literal(values.int64(3n)), logicalTypes.decimal(10, 2)),
       builder.functionCall(7, functionArgs),
       builder.jsonOperation('extract', [builder.literal(values.json(new Map([['a', 1n]])))], '$.a'),
+      builder.jsonOperation(
+        'extract',
+        [builder.literal(values.json(new Map([['dynamic', 2n]])))],
+        builder.literal(values.text('$.dynamic')),
+      ),
       builder.scalarSubquery(scalarQuery),
       builder.exists(scalar(builder, values.boolean(true), 'present'), true),
       builder.membership(builder.literal(values.int64(1n)), [builder.literal(values.int64(1n)), builder.literal(values.int64(2n))]),
       builder.membership(builder.literal(values.int64(1n)), scalar(builder, values.int64(1n), 'member'), true),
+      builder.row([builder.literal(values.int64(1n)), builder.literal(values.text('pair'))]),
+      builder.collate(builder.literal(values.text('name')), 'nocase'),
+      builder.windowCall('row_number', [], {
+        partitionBy: [],
+        orderBy: [builder.order(builder.literal(values.int64(1n)))],
+        frame: { mode: 'rows', start: { type: 'unbounded_preceding' }, end: { type: 'current_row' } },
+      }),
       builder.entropy('test/sample', 2, 16),
     ]
     functionArgs.push(builder.literal(values.int64(999n)))
@@ -96,12 +108,23 @@ describe('IrBuilder mutations and preconditions', () => {
   it('builds and round-trips every mutation variant with unique IDs', () => {
     const builder = new IrBuilder()
     const assertion = builder.assertion(scalar(builder, values.boolean(true), 'ok'))
+    const mutationCte = builder.cte('incoming_rows', scalar(builder, values.int64(1n), 'id'))
+    const upsertClauses = [
+      builder.upsertDoUpdate(
+        [builder.assignment('value', builder.oldNew('new', 'value'))],
+        builder.upsertConstraintTarget(10),
+        builder.binary('ne', builder.oldNew('old', 'value'), builder.oldNew('new', 'value')),
+      ),
+      builder.upsertDoNothing(),
+    ]
     const insert = builder.insert('items', ['id'], [[builder.literal(values.int64(1n))]], {
-      conflict: 'ignore', affectedRows: affectedRows.exactly(1n), label: 'insert-item',
+      conflict: 'ignore', affectedRows: affectedRows.exactly(1n), label: 'insert-item', alias: 'incoming',
+      ctes: [mutationCte], recursive: true, upsertClauses,
     })
     const update = builder.update(1, [builder.assignment('value', builder.literal(values.text('updated')))], {
       where: builder.binary('eq', builder.column('id'), builder.literal(values.int64(1n))),
-      affectedRows: affectedRows.atMost(1n),
+      affectedRows: affectedRows.atMost(1n), conflict: 'ignore',
+      from: scalar(builder, values.text('source'), 'value'), fromAlias: 'snapshot',
     })
     const deletion = builder.delete({ kind: 'name', name: 'expired_items' }, {
       where: builder.literal(values.boolean(false)), affectedRows: affectedRows.range(0n, 5n),
@@ -109,11 +132,20 @@ describe('IrBuilder mutations and preconditions', () => {
     const upsert = builder.upsert('items', ['id', 'value'], [builder.literal(values.int64(2n)), builder.literal(values.text('new'))], 'items_pk', [
       builder.assignment('value', builder.literal(values.text('replaced'))),
     ], { affectedRows: affectedRows.atLeast(1n) })
-    const source = scalar(builder, values.int64(3n), 'id')
+    const insertSource = scalar(builder, values.int64(3n), 'id')
+    const insertSelect = builder.insertSelect('items', ['id'], insertSource, {
+      conflict: 'replace', affectedRows: affectedRows.exactly(1n), alias: 'copied',
+    })
+    const insertDefault = builder.insertDefault('default_items', { affectedRows: affectedRows.exactly(1n) })
+    const upsertSource = scalar(builder, values.int64(5n), 'id')
+    const upsertSelect = builder.upsertSelect('items', ['id'], upsertSource, 'items_pk', [], {
+      affectedRows: affectedRows.atMost(1n), alias: 'upsert_target',
+    })
+    const source = scalar(builder, values.int64(4n), 'id')
     const clause = builder.mergeClause('matched', 'update', [builder.assignment('value', builder.literal(values.text('merged')))], builder.literal(values.boolean(true)))
     const merge = builder.merge('items', source, builder.literal(values.boolean(true)), [clause], { affectedRows: affectedRows.unconstrained() })
     const stateful = builder.statefulCall(5, 8, [builder.literal(values.int64(9n))], { affectedRows: affectedRows.exactly(1n) })
-    const program = builder.program([assertion], [insert, update, deletion, upsert, merge, stateful], new Map([['intent', Uint8Array.of(1, 2)]]))
+    const program = builder.program([assertion], [insert, insertSelect, insertDefault, update, deletion, upsert, upsertSelect, merge, stateful], new Map([['intent', Uint8Array.of(1, 2)]]))
 
     expect(validateTransactionProgram(program).ok).toBe(true)
     expect(decodeTransactionProgram(encodeTransactionProgram(program))).toEqual(program)
@@ -121,6 +153,51 @@ describe('IrBuilder mutations and preconditions', () => {
     expect(Object.isFrozen(built)).toBe(true)
     expect(Object.isFrozen(built.mutations)).toBe(true)
     expect(Object.isFrozen(built.mutations[0])).toBe(true)
+    expect(insert.upsertClauses).toEqual(upsertClauses)
+    expect(insert.ctes).toEqual([mutationCte])
+    expect(insert.recursive).toBe(true)
+  })
+
+  it('rejects malformed ordered UPSERT clauses and schema-mismatched targets', () => {
+    const builder = new IrBuilder()
+    const assertion = builder.assertion(scalar(builder, values.boolean(true), 'ok'))
+    const assignment = builder.assignment('value', builder.literal(values.text('updated')))
+    const invalidNothing = {
+      ...builder.upsertDoNothing(builder.upsertConstraintTarget(3)), assignments: [assignment],
+    }
+    const invalid = builder.insert('items', ['id'], [[builder.literal(values.int64(1n))]], {
+      upsertClauses: [
+        builder.upsertDoNothing(),
+        builder.upsertDoUpdate([assignment], builder.upsertConstraintTarget(999)),
+        invalidNothing,
+        builder.upsertDoUpdate([], builder.upsertIndexTarget(999)),
+      ],
+    })
+    const schema = {
+      version: 1 as const, name: 'upsert-validation', seedRows: [], functionIds: [], collationIds: [], moduleIds: [],
+      objects: [{
+        kind: 'table' as const, id: 1, name: 'items', declarationOrder: 0, withoutRowId: true,
+        columns: [{ id: 2, name: 'id', declarationOrder: 0, valueType: { logical: { kind: 'int64' as const }, nullable: false } }],
+        constraints: [{ kind: 'primary_key' as const, id: 3, name: 'items_pk', columnIds: [2] }],
+      }],
+    }
+    expect(validateTransactionProgram(builder.program([assertion], [invalid]), { schema }).diagnostics)
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({ code: 'UPSERT_TARGET_REQUIRED' }),
+        expect.objectContaining({ code: 'UPSERT_CONFLICT_TARGET_INVALID' }),
+        expect.objectContaining({ code: 'UPSERT_NOTHING_SHAPE_INVALID' }),
+        expect.objectContaining({ code: 'UPSERT_UPDATE_ASSIGNMENTS_EMPTY' }),
+      ]))
+
+    const defaultValues = builder.insertDefault('items', {
+      upsertClauses: [builder.upsertDoNothing(builder.upsertConstraintTarget(3))],
+    })
+    expect(validateTransactionProgram(builder.program([assertion], [defaultValues]), { schema }).diagnostics)
+      .toContainEqual(expect.objectContaining({ code: 'UPSERT_DEFAULT_VALUES_INVALID' }))
+
+    const recursiveWithoutCte = builder.delete('items', { recursive: true })
+    expect(validateTransactionProgram(builder.program([assertion], [recursiveWithoutCte]), { schema }).diagnostics)
+      .toContainEqual(expect.objectContaining({ code: 'RECURSIVE_CTE_REQUIRED' }))
   })
 
   it('builds inline and digest expectations and copies digest bytes', () => {

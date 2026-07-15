@@ -1,15 +1,22 @@
 import type {
   ExecutionManifest,
+  RegisteredCollation,
+  RegisteredFunction,
   SchemaColumn,
   SchemaConstraint,
+  SchemaIndex,
   SchemaManifest,
   SchemaObject,
   SchemaTable,
+  SchemaView,
+} from '@chronolog/ir'
+import {
+  isReservedSchemaObjectName,
+  isValidSqlIdentifier,
+  sqliteIdentifierKey,
 } from '@chronolog/ir'
 
 import { CompilerError } from './types.js'
-
-const IDENTIFIER = /^[a-z][a-z0-9_]{0,62}$/u
 
 export class Catalog {
   readonly schema: SchemaManifest
@@ -25,7 +32,7 @@ export class Catalog {
     this.#transactionLogTable = transactionLogTable()
     this.#columnsByTable.set(
       this.#transactionLogTable.id,
-      new Map(this.#transactionLogTable.columns.map((column) => [column.name, column])),
+      new Map(this.#transactionLogTable.columns.map((column) => [sqliteIdentifierKey(column.name), column])),
     )
   }
 
@@ -42,7 +49,7 @@ export class Catalog {
 
   object(reference: { readonly kind: 'name'; readonly name: string } | { readonly kind: 'id'; readonly objectId: number }): SchemaObject {
     const object = reference.kind === 'name'
-      ? this.#objectsByName.get(reference.name)
+      ? this.#objectsByName.get(sqliteIdentifierKey(reference.name))
       : this.#objectsById.get(reference.objectId)
     if (object === undefined) throw new CompilerError('IR_UNKNOWN_SCHEMA_OBJECT')
     return object
@@ -62,8 +69,14 @@ export class Catalog {
     return this.table({ kind: 'id', objectId: id })
   }
 
+  viewByName(name: string): SchemaView {
+    const object = this.object({ kind: 'name', name })
+    if (object.kind !== 'view') throw new CompilerError('IR_TARGET_NOT_VIEW', object.id)
+    return object
+  }
+
   column(table: SchemaTable, name: string): SchemaColumn {
-    const column = this.#columnsByTable.get(table.id)?.get(name)
+    const column = this.#columnsByTable.get(table.id)?.get(sqliteIdentifierKey(name))
     if (column === undefined) throw new CompilerError('IR_UNKNOWN_COLUMN', table.id)
     return column
   }
@@ -83,12 +96,47 @@ export class Catalog {
   }
 
   namedUnique(table: SchemaTable, name: string): Extract<SchemaConstraint, { kind: 'primary_key' | 'unique' }> {
-    const constraint = table.constraints.find(
+    const key = sqliteIdentifierKey(name)
+    const constraints = table.constraints.filter(
       (candidate): candidate is Extract<SchemaConstraint, { kind: 'primary_key' | 'unique' }> =>
-        (candidate.kind === 'primary_key' || candidate.kind === 'unique') && candidate.name === name,
+        (candidate.kind === 'primary_key' || candidate.kind === 'unique') && sqliteIdentifierKey(candidate.name) === key,
     )
-    if (constraint === undefined) throw new CompilerError('IR_UNKNOWN_UNIQUE_CONSTRAINT', table.id, 'constraint')
+    if (constraints.length === 0) throw new CompilerError('IR_UNKNOWN_UNIQUE_CONSTRAINT', table.id, 'constraint')
+    if (constraints.length > 1) throw new CompilerError('IR_AMBIGUOUS_UNIQUE_CONSTRAINT', table.id, 'constraint')
+    return constraints[0]!
+  }
+
+  uniqueConstraintById(
+    table: SchemaTable,
+    id: number,
+  ): Extract<SchemaConstraint, { kind: 'primary_key' | 'unique' }> {
+    const constraint = table.constraints.find((candidate) => candidate.id === id)
+    if (constraint?.kind !== 'primary_key' && constraint?.kind !== 'unique') {
+      throw new CompilerError('IR_UNKNOWN_UNIQUE_CONSTRAINT', id, 'constraint')
+    }
     return constraint
+  }
+
+  uniqueIndexById(table: SchemaTable, id: number): SchemaIndex {
+    const index = this.#objectsById.get(id)
+    if (index?.kind !== 'index' || !index.unique || index.tableId !== table.id) {
+      throw new CompilerError('IR_UNKNOWN_UNIQUE_INDEX', id, 'constraint')
+    }
+    return index
+  }
+
+  functionById(id: number): RegisteredFunction {
+    if (!this.schema.functionIds.includes(id)) throw new CompilerError('IR_FUNCTION_NOT_ENABLED', id)
+    const fn = this.manifest.functions.find((candidate) => candidate.id === id)
+    if (fn === undefined) throw new CompilerError('IR_FUNCTION_UNREGISTERED', id)
+    return fn
+  }
+
+  collationById(id: number): RegisteredCollation {
+    if (!this.schema.collationIds.includes(id)) throw new CompilerError('IR_COLLATION_NOT_ENABLED', id)
+    const collation = this.manifest.collations.find((candidate) => candidate.id === id)
+    if (collation === undefined) throw new CompilerError('IR_COLLATION_UNREGISTERED', id)
+    return collation
   }
 
   #construct(): void {
@@ -96,12 +144,13 @@ export class Catalog {
     assertIdentifier(this.schema.name, null)
     for (const object of [...this.schema.objects].sort((left, right) => left.id - right.id)) {
       assertId(object.id, 'SCHEMA_OBJECT_ID_INVALID')
-      assertIdentifier(object.name, object.id)
-      if (this.#objectsById.has(object.id) || this.#objectsByName.has(object.name)) {
+      assertSchemaObjectIdentifier(object.name, object.id)
+      const objectNameKey = sqliteIdentifierKey(object.name)
+      if (this.#objectsById.has(object.id) || this.#objectsByName.has(objectNameKey)) {
         throw new CompilerError('SCHEMA_DUPLICATE_OBJECT', object.id, 'schema')
       }
       this.#objectsById.set(object.id, object)
-      this.#objectsByName.set(object.name, object)
+      this.#objectsByName.set(objectNameKey, object)
       if (object.kind === 'table') this.#registerTable(object)
     }
     for (const object of this.#objectsById.values()) {
@@ -117,16 +166,20 @@ export class Catalog {
     for (const column of table.columns) {
       assertId(column.id, 'SCHEMA_COLUMN_ID_INVALID')
       assertIdentifier(column.name, column.id)
-      if (ids.has(column.id) || byName.has(column.name)) {
+      const columnNameKey = sqliteIdentifierKey(column.name)
+      if (ids.has(column.id) || byName.has(columnNameKey)) {
         throw new CompilerError('SCHEMA_DUPLICATE_COLUMN', column.id, 'schema')
       }
       ids.add(column.id)
-      byName.set(column.name, column)
+      byName.set(columnNameKey, column)
       if (column.generated !== undefined) {
         throw new CompilerError('SCHEMA_GENERATED_COLUMN_UNSUPPORTED', column.id, 'schema')
       }
-      if (column.valueType.logical.kind === 'text' && column.valueType.logical.collation !== 'binary') {
-        throw new CompilerError('SCHEMA_COLLATION_UNSUPPORTED', column.id, 'schema')
+      if (column.valueType.logical.kind === 'text' &&
+          column.valueType.logical.collation.startsWith('registered:')) {
+        const id = Number(column.valueType.logical.collation.slice('registered:'.length))
+        if (!Number.isSafeInteger(id)) throw new CompilerError('SCHEMA_COLLATION_INVALID', column.id, 'schema')
+        this.collationById(id)
       }
     }
     this.#columnsByTable.set(table.id, byName)
@@ -182,9 +235,14 @@ function transactionLogTable(): SchemaTable {
 }
 
 export function assertIdentifier(name: string, id: number | null): void {
-  if (!IDENTIFIER.test(name) || name.startsWith('chronolog_') || name.startsWith('sqlite_') || name.startsWith('dolt')) {
+  if (!isValidSqlIdentifier(name)) {
     throw new CompilerError('SCHEMA_IDENTIFIER_INVALID', id, 'schema')
   }
+}
+
+function assertSchemaObjectIdentifier(name: string, id: number | null): void {
+  assertIdentifier(name, id)
+  if (isReservedSchemaObjectName(name)) throw new CompilerError('SCHEMA_IDENTIFIER_RESERVED', id, 'schema')
 }
 
 function assertId(id: number, code: string): void {

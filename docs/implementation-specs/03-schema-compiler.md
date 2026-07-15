@@ -46,9 +46,10 @@ manifests whose digests have already been verified.
 ### 3.1 Construction
 
 `Catalog.fromManifest(schema, executionManifest)` builds indexed maps by object
-ID and canonical name. Construction validates:
+ID and SQLite lookup key. Lookup folds ASCII case only, including for quoted
+identifiers, and leaves non-ASCII characters distinct. Construction validates:
 
-- unique names and IDs;
+- names unique under SQLite identifier comparison and unique IDs;
 - reserved-name exclusions;
 - primary and unique key composition;
 - foreign-key type and collation equivalence;
@@ -194,10 +195,45 @@ Operations with exact audited SQLite semantics may lower directly, including
 null tests, Boolean connectives, binary collation comparisons, and bounded text
 concatenation.
 
+Checked Int64 negation, addition, subtraction, multiplication, division, and
+remainder lower through compiler-owned SQL guards. SQLite's integer result is
+accepted only when its storage class remains `integer`; REAL overflow promotion
+and the Null result of a zero divisor instead trigger the stable consensus
+`SQL_EVALUATION_ERROR`. Left shifts additionally require a count in `[0, 63]`
+and prove no discarded sign bits by shifting the result back. Right shifts
+require the same bounded count. Bitwise XOR is expressed from exact AND, OR,
+and complement operations. The same checked representation supports
+TimestampMs plus/minus DurationMs, TimestampMs differences, DurationMs
+addition/subtraction, and DurationMs scaling by Int64. These guards expose no
+floating result or value.
+
+Compiler-owned builtin calls currently cover `char`, `concat`, `concat_ws`,
+`length`, `octet_length`, ASCII `lower`/`upper`, `trim`/`ltrim`/`rtrim`,
+`replace`, `instr`, `substr`/`substring`, `hex`,
+`coalesce`/`ifnull`/`nullif`, `if`/`iif`, `likelihood`/`likely`/`unlikely`, the scalar
+`glob()`/`like()` function forms, scalar `min()`/`max()`, `quote`, `typeof`,
+`unhex`, `unicode`, `unistr`, `unistr_quote`, `zeroblob`, and integer
+`abs`/`sign`. The compiler owns their closed names and typed overloads; no
+schema function registration is required. SQL Null is polymorphic when
+unifying conditional, compound, comparison, and null-selection expressions.
+All-Null expressions retain the canonical nullable-Blob fallback when no
+logical type can be inferred.
+
+Minimum-Int64 `abs` overflow is normalized at consensus statement-execution
+time to the stable `SQL_EVALUATION_ERROR` outcome without inspecting backend
+error text; precondition or command identity provides attribution.
+Prepare/profile failures remain operational failures, and local reads retain
+the backend's native diagnostic. Connection-history, randomness, extension
+loading, engine-build/physical introspection, ambient date/time, optional
+compile-time functions, formatting, rounding, and floating-result functions
+remain outside this builtin profile. Additional JSON1 calls require explicit
+canonical JSON IR semantics rather than generic scalar typing.
+
 ### 6.2 Kernel operations
 
-Operations whose SQLite semantics can promote, round, normalize, consult
-ambient state, or differ by build lower to `chronolog_` kernel functions:
+Operations whose SQLite semantics cannot be guarded without observing an
+inexact value, or that need wider accumulators, normalization, or registered
+rounding rules, lower to `chronolog_` kernel functions:
 
 ```text
 chronolog_i64_add
@@ -253,6 +289,24 @@ Checked integer and decimal aggregates use kernels. Order-sensitive aggregates
 receive an explicitly ordered subquery or registered ordered aggregate. Bare
 columns outside grouping are rejected before rendering.
 
+The current portable compiler lowers order-insensitive `COUNT(*)`,
+`COUNT(expr)`, `COUNT(DISTINCT expr)`, `MIN`, and `MAX`. `COUNT` is non-null
+`Int64`; extrema preserve the input logical type and are nullable for empty or
+all-null input. Standard aggregate `FILTER (WHERE ...)` predicates are typed as
+Boolean and lowered without changing aggregate order semantics. Grouped
+expressions accept qualified/unqualified references to the same resolved
+column and columns functionally determined by a complete non-null primary or
+unique key. Extrema are currently limited to exact SQLite storage orders:
+Boolean, Int64, TimestampMs, DurationMs, binary/code-point Text, Blob, and
+UUID. Exact integer/decimal sums remain gated on checked accumulator kernels;
+SQLite's scan-order-dependent intermediate overflow is not accepted as their
+consensus definition.
+
+Boolean `EVERY`/`BOOL_AND` and `ANY`/`SOME`/`BOOL_OR` are also order-independent
+and lower to `MIN` and `MAX` over compiler-typed Boolean values. They ignore
+Null inputs and return Null for empty or all-Null input. A literal SQL Null is a
+valid aggregate filter and simply selects no input rows.
+
 ### 7.4 Windows and recursive CTEs
 
 Window terms include explicit collation and null placement. Recursive CTEs
@@ -262,8 +316,10 @@ VM opcode counts are not used as canonical recursion limits.
 ### 7.5 Pagination
 
 Consensus pagination compiles from a typed cursor containing every order term.
-Offset pagination is allowed only with a total order. Keyset pagination is
-preferred and renders a lexicographic predicate with explicit null semantics.
+Offset pagination is compiled with a total order. Authored terms are preserved
+and the compiler appends canonical tie-breakers as needed. Keyset pagination is
+preferred for performance and renders a lexicographic predicate with explicit
+null semantics.
 
 ## 8. Result plan
 
@@ -302,21 +358,96 @@ error priority.
 
 ### 9.2 Insert
 
-Insert rendering always names target columns. Defaults are expanded by the
-compiler. Multirow values are ordered canonically before execution. Primary-key
-components are present after expansion.
+Insert rendering always names target columns and quotes an optional target
+alias. Explicit values retain their signed canonical IR order. Query sources
+lower to `INSERT ... SELECT` with authored ordering preserved and deterministic
+tie-breakers derived from every projected logical value. Source width, logical
+types, and nullability are checked against target columns before SQL is
+prepared. The canonical empty-column/single-empty-row shape lowers to
+`DEFAULT VALUES`, inserting exactly one row under the explicit `error`,
+`ignore`, or `replace` policy. Defaults remain schema-manifest values compiled
+under the same deterministic checks as ordinary seed values.
+
+The three encoded conflict policies lower directly under the pinned engine:
+`error` to `INSERT`, `ignore` to `INSERT OR IGNORE`, and `replace` to
+`INSERT OR REPLACE`. Affected-row expectations are still checked against the
+statement's exact change count; ignored rows count zero and replacement counts
+the inserted row according to SQLite semantics.
 
 ### 9.3 Upsert
 
-The normalized plan identifies one named unique constraint and one explicit
-action. It MUST NOT emit an unqualified `ON CONFLICT`, `INSERT OR REPLACE`, or
-backend-selected conflict target.
+The normalized upsert plan identifies one named primary-key or unique
+constraint. The compiler emits its exact column list as the conflict target,
+never an unqualified `ON CONFLICT`. A nonempty assignment list emits
+`DO UPDATE SET`; an empty list emits `DO NOTHING`; and an optional predicate
+emits `DO UPDATE ... WHERE`. `excluded` is reserved as the incoming-row scope,
+so it cannot be used as an upsert target alias.
+
+The input may also be a typed query. It receives canonical full-row ordering,
+source width/type/nullability checks, and an unconditional outer `WHERE` to
+resolve SQLite's documented `SELECT ... ON CONFLICT` parsing ambiguity before
+the named conflict action is appended.
+
+`INSERT OR REPLACE` is available only through the explicit insert `replace`
+policy. It is not used to implement named upsert and therefore does not
+silently substitute delete-and-insert behavior for `DO UPDATE`.
 
 ### 9.4 Update and delete
 
 The initial executor applies target rows by primary key. All ordinary update
 assignments read the old row. A mutation plan carries rule invocations and
 returning evaluation after each logical row operation.
+
+The current direct SQLite lowering quotes mutation aliases on `UPDATE` and
+`DELETE`; qualified IR column references resolve case-insensitively to that
+declared alias while the renderer preserves the schema's declared spelling.
+
+`UPDATE OR IGNORE` and `UPDATE OR REPLACE` are lowered only when the predicate
+proves the target is a single primary-key or unique-key lookup. Broad conflict
+updates remain rejected because SQLite does not expose a portable logical row
+visitation order, and the winning row can otherwise affect final state.
+
+`UPDATE ... FROM` accepts a named typed query source when the compiler proves
+it returns at most one row globally, or when a simple source table is joined
+through every projected column of a primary or unique key. This covers
+constant, aggregate, limited, unique-key lookup, and ordinary key-preserving
+update sources without inheriting SQLite's arbitrary source-row choice when
+several source rows match one target. More complex joins require a broader
+per-target uniqueness proof and remain gated.
+
+Equivalent surface syntax is normalized before canonical IR: explicit
+`OR ABORT`, `OR FAIL`, and `OR ROLLBACK` are the ordinary `error` policy because
+any constraint failure rejects and rolls back the entire atomic Chronolog
+candidate, and a `main.` qualifier names the same manifest object. Canonical
+update assignments already have SQLite's simultaneous old-row evaluation, so
+row-value assignments require no execution-model extension once parsed.
+Planner hints are not consensus semantics. The compile-option-dependent
+UPDATE/DELETE `ORDER BY ... LIMIT` forms remain gated until they are lowered
+through a canonical primary-key selection plan. SQLite documents that those
+ordering terms choose the limited subset but do not control actual mutation or
+RETURNING order.
+
+The current token-aware SQL frontend directly repairs its selected parser's
+missing `DEFAULT VALUES`, `REPLACE INTO`, and `UPDATE OR ...` grammar and
+accepts `main.` as the application schema. That upstream parser also
+rejects SQLite `UPDATE ... FROM`, `ON CONFLICT ... DO ...`, and row-value `SET`
+syntax before producing an AST. The canonical IR and compiler paths are ready
+for the first two and already model the third's simultaneous semantics, but
+exposing those spellings through exact SQL awaits the planned parser replacement
+rather than a second ad hoc SQL grammar hidden in preprocessing.
+
+### 9.4.1 RETURNING implementation boundary
+
+Mutation IR retains the optional returning query, but the current compiler
+rejects it with `IR_RETURNING_UNSUPPORTED`. Supporting SQLite `RETURNING`
+requires more than rendering a clause: the executor's mutation contract
+currently returns only an affected-row count, the `chronolog-accepted-result-v1`
+digest frames only precondition digests and counts, and RPC outcomes expose no
+canonical returned rows. SQLite also does not guarantee RETURNING row order.
+Enabling it therefore requires a versioned mutation-result envelope, canonical
+result-mode handling and limits, digest framing, and an RPC/client result
+surface. Silently executing and discarding RETURNING rows would be incompatible
+with standard SQL ergonomics and is intentionally not done.
 
 ### 9.5 Merge
 
@@ -405,9 +536,11 @@ local_read
 ```
 
 Only `internal_schema` may create application schema. Only derived-index mode
-may touch managed shadow objects. Consensus modes deny direct `sqlite_`,
-`dolt_`, and `chronolog_` access, pragmas, attach/detach, dynamic extensions,
-transactions, savepoints, and unregistered functions.
+may touch managed shadow objects. Consensus modes deny direct backend-internal
+object access, including the `sqlite_`, `dolt_`, `doltlite_`, `chronolog_`, and
+`pragma_` namespaces and protected eponymous virtual tables, plus pragmas,
+attach/detach, dynamic extensions, transactions, savepoints, and unregistered
+functions.
 
 ## 14. Tests
 
@@ -437,4 +570,3 @@ Required compiler tests include:
 - Constraint and rule attribution use stable IR IDs.
 - The execution manifest measures the actual native engine and configuration.
 - Generated SQL remains fully subject to the native security authorizer.
-

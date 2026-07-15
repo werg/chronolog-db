@@ -2,15 +2,15 @@ import { decodeUtf8, utf8 } from '@chronolog/canonical'
 
 import { assertValidSchemaManifest, assertValidTransactionProgram, type ProgramValidationContext } from './validation.js'
 import type {
-  AffectedRowsExpectation, Assignment, BinaryOperator, CanonicalJsonValue, CanonicalQueryResult,
-  CompoundTerm, ConditionalBranch, ConflictPolicy, ContextField, Cte, CteRelation, DeleteMutation, ExpectedResult,
+  AffectedRowsExpectation, Assignment, BinaryOperator, BuiltinFunctionName, CanonicalJsonValue, CanonicalQueryResult, CollationId,
+  AggregateOperation, CompoundTerm, ConditionalBranch, ConflictPolicy, ContextField, Cte, CteRelation, DeleteMutation, ExpectedResult,
   Expr, FtsRelation, InlineResult, InsertMutation, Join, LogicalType, LogicalValue, MergeClause,
   MergeMutation, Mutation, ObjectReference, OrderTerm, PageClause, Precondition, Projection, Query,
   RegisteredStatefulCall, Relation, ResultColumn, ResultDigest, ResultMode, SchemaColumn,
   SchemaConstraint, SchemaIndex, SchemaManifest, SchemaObject, SchemaTable, SeedRow,
   SpatialSearchRelation, SubqueryRelation, SystemRelation, TableFunctionRelation, TableRelation,
-  TransactionProgram, UnaryOperator, UpdateMutation, UpsertMutation, ValueType, VectorElementType,
-  VectorSearchRelation, ViewRelation, WindowDefinition,
+  TransactionProgram, UnaryOperator, UpdateMutation, UpsertClause, UpsertConflictTarget, UpsertMutation, ValueType, VectorElementType,
+  VectorSearchRelation, ViewRelation, WindowDefinition, WindowFrame, WindowOperation, WindowSpecification,
 } from './types.js'
 
 export const values = Object.freeze({
@@ -59,6 +59,7 @@ export type MutationTarget = string | number | ObjectReference
 
 export interface QueryOptions {
   readonly ctes?: readonly Cte[]
+  readonly recursive?: boolean
   readonly from?: Relation
   readonly joins?: readonly Join[]
   readonly where?: Expr
@@ -69,6 +70,7 @@ export interface QueryOptions {
   readonly orderBy?: readonly OrderTerm[]
   readonly page?: PageClause
   readonly resultMode?: ResultMode
+  readonly distinct?: boolean
 }
 
 export interface MutationOptions {
@@ -76,12 +78,17 @@ export interface MutationOptions {
   readonly returning?: Query
   readonly label?: string
 }
+export interface TargetMutationOptions extends MutationOptions {
+  readonly alias?: string
+  readonly ctes?: readonly Cte[]
+  readonly recursive?: boolean
+}
 
-export interface InsertOptions extends MutationOptions { readonly conflict?: ConflictPolicy }
-export interface UpdateOptions extends MutationOptions { readonly where?: Expr }
-export interface DeleteOptions extends MutationOptions { readonly where?: Expr }
-export type UpsertOptions = MutationOptions
-export type MergeOptions = MutationOptions
+export interface InsertOptions extends TargetMutationOptions { readonly conflict?: ConflictPolicy; readonly upsertClauses?: readonly UpsertClause[] }
+export interface UpdateOptions extends TargetMutationOptions { readonly where?: Expr; readonly conflict?: ConflictPolicy; readonly from?: Query; readonly fromAlias?: string }
+export interface DeleteOptions extends TargetMutationOptions { readonly where?: Expr }
+export interface UpsertOptions extends TargetMutationOptions { readonly where?: Expr }
+export type MergeOptions = TargetMutationOptions
 
 export class IrBuilder {
   private nextId: number
@@ -93,12 +100,38 @@ export class IrBuilder {
   context(field: ContextField): Expr { return immutable({ kind: 'context', id: this.id(), field }) }
   oldNew(scope: 'old' | 'new', column: string): Expr { return immutable({ kind: 'old_new', id: this.id(), scope, column }) }
   unary(operator: UnaryOperator, operand: Expr): Expr { return immutable({ kind: 'unary', id: this.id(), operator, operand }) }
-  binary(operator: BinaryOperator, left: Expr, right: Expr): Expr { return immutable({ kind: 'binary', id: this.id(), operator, left, right }) }
+  binary(operator: BinaryOperator, left: Expr, right: Expr, escape?: Expr): Expr {
+    return immutable({ kind: 'binary', id: this.id(), operator, left, right, ...(escape === undefined ? {} : { escape }) })
+  }
   branch(when: Expr, then: Expr): ConditionalBranch { return immutable({ when, then }) }
   conditional(branches: readonly ConditionalBranch[], otherwise: Expr): Expr { return immutable({ kind: 'conditional', id: this.id(), branches: [...branches], otherwise }) }
   cast(value: Expr, target: LogicalType): Expr { return immutable({ kind: 'cast', id: this.id(), value, target }) }
+  builtin(name: BuiltinFunctionName, args: readonly Expr[]): Expr { return immutable({ kind: 'builtin', id: this.id(), name, args: [...args] }) }
   functionCall(functionId: number, args: readonly Expr[]): Expr { return immutable({ kind: 'function', id: this.id(), functionId, args: [...args] }) }
-  jsonOperation(operation: 'extract' | 'type' | 'array' | 'object' | 'merge', args: readonly Expr[], path?: string): Expr { return immutable({ kind: 'json', id: this.id(), operation, args: [...args], ...(path === undefined ? {} : { path }) }) }
+  aggregate(
+    operation: AggregateOperation,
+    value?: Expr,
+    distinct = false,
+    filter?: Expr,
+    orderBy?: readonly OrderTerm[],
+  ): Expr {
+    return immutable({
+      kind: 'aggregate', id: this.id(), operation, distinct,
+      ...(value === undefined ? {} : { value }),
+      ...(filter === undefined ? {} : { filter }),
+      ...(orderBy === undefined ? {} : { orderBy: [...orderBy] }),
+    })
+  }
+  jsonOperation(
+    operation: 'extract' | 'type' | 'array' | 'object' | 'merge',
+    args: readonly Expr[],
+    path?: string | Expr,
+  ): Expr {
+    return immutable({
+      kind: 'json', id: this.id(), operation, args: [...args],
+      ...(typeof path === 'string' ? { path } : path === undefined ? {} : { pathExpression: path }),
+    })
+  }
   scalarSubquery(query: Query): Expr { return immutable({ kind: 'scalar_subquery', id: this.id(), query }) }
   exists(query: Query, negated = false): Expr { return immutable({ kind: 'exists', id: this.id(), query, negated }) }
   membership(value: Expr, members: readonly Expr[] | Query, negated = false): Expr {
@@ -107,6 +140,14 @@ export class IrBuilder {
       : { kind: 'membership', id: this.id(), value, query: members as Query, negated })
   }
   entropy(label: string, index: number, length: number): Expr { return immutable({ kind: 'entropy', id: this.id(), label, index, length }) }
+  row(items: readonly Expr[]): Expr { return immutable({ kind: 'row', id: this.id(), items: [...items] }) }
+  collate(expression: Expr, collation: CollationId): Expr { return immutable({ kind: 'collate', id: this.id(), expression, collation }) }
+  windowCall(operation: WindowOperation, args: readonly Expr[], window: string | WindowSpecification, filter?: Expr): Expr {
+    return immutable({
+      kind: 'window', id: this.id(), operation, args: [...args], window,
+      ...(filter === undefined ? {} : { filter }),
+    })
+  }
 
   table(name: string, alias?: string): TableRelation { return immutable({ kind: 'table', id: this.id(), name, ...(alias === undefined ? {} : { alias }) }) }
   view(name: string, alias?: string): ViewRelation { return immutable({ kind: 'view', id: this.id(), name, ...(alias === undefined ? {} : { alias }) }) }
@@ -119,13 +160,30 @@ export class IrBuilder {
   transactionLog(alias?: string): SystemRelation { return immutable({ kind: 'system_relation', id: this.id(), relation: 'transaction_log', ...(alias === undefined ? {} : { alias }) }) }
 
   cte(name: string, query: Query, materialized: Cte['materialized'] = 'default'): Cte { return immutable({ id: this.id(), name, query, materialized }) }
-  join(kind: Join['kind'], relation: Relation, on?: Expr): Join { return immutable({ id: this.id(), kind, relation, ...(on === undefined ? {} : { on }) }) }
+  join(kind: Join['kind'], relation: Relation, on?: Expr, using?: readonly string[]): Join {
+    return immutable({
+      id: this.id(), kind, relation,
+      ...(on === undefined ? {} : { on }),
+      ...(using === undefined ? {} : { using: [...using] }),
+    })
+  }
   projection(name: string, expression: Expr): Projection { return immutable({ id: this.id(), name, expression }) }
   order(expression: Expr, direction: OrderTerm['direction'] = 'asc', nulls: OrderTerm['nulls'] = direction === 'asc' ? 'last' : 'first', canonicalRowTieBreaker = false): OrderTerm {
     return immutable({ id: this.id(), expression, direction, nulls, ...(canonicalRowTieBreaker ? { canonicalRowTieBreaker: true } : {}) })
   }
   page(limit: number, offset?: number): PageClause { return immutable({ limit, ...(offset === undefined ? {} : { offset }) }) }
-  window(name: string, partitionBy: readonly Expr[] = [], orderBy: readonly OrderTerm[] = []): WindowDefinition { return immutable({ id: this.id(), name, partitionBy: [...partitionBy], orderBy: [...orderBy] }) }
+  window(
+    name: string,
+    partitionBy: readonly Expr[] = [],
+    orderBy: readonly OrderTerm[] = [],
+    options: { readonly base?: string; readonly frame?: WindowFrame } = {},
+  ): WindowDefinition {
+    return immutable({
+      id: this.id(), name, partitionBy: [...partitionBy], orderBy: [...orderBy],
+      ...(options.base === undefined ? {} : { base: options.base }),
+      ...(options.frame === undefined ? {} : { frame: options.frame }),
+    })
+  }
   compound(operator: CompoundTerm['operator'], query: Query): CompoundTerm { return immutable({ id: this.id(), operator, query }) }
   query(projection: readonly Projection[], options: QueryOptions = {}): Query {
     return immutable({
@@ -133,32 +191,61 @@ export class IrBuilder {
       groupBy: [...(options.groupBy ?? [])], projection: [...projection], windows: [...(options.windows ?? [])],
       compounds: [...(options.compounds ?? [])], orderBy: [...(options.orderBy ?? [])],
       resultMode: options.resultMode ?? resultModes.multiset(),
+      ...(options.recursive === true ? { recursive: true } : {}),
       ...(options.from === undefined ? {} : { from: options.from }),
       ...(options.where === undefined ? {} : { where: options.where }),
       ...(options.having === undefined ? {} : { having: options.having }),
       ...(options.page === undefined ? {} : { page: options.page }),
+      ...(options.distinct === true ? { distinct: true } : {}),
     })
   }
 
   assignment(column: string, value: Expr): Assignment { return immutable({ column, value }) }
+  upsertConstraintTarget(constraintId: number): UpsertConflictTarget { return immutable({ constraintId }) }
+  upsertIndexTarget(indexId: number): UpsertConflictTarget { return immutable({ indexId }) }
+  upsertDoNothing(target?: UpsertConflictTarget): UpsertClause {
+    return immutable({ id: this.id(), action: 'nothing', assignments: [], ...(target === undefined ? {} : { target }) })
+  }
+  upsertDoUpdate(assignments: readonly Assignment[], target?: UpsertConflictTarget, where?: Expr): UpsertClause {
+    return immutable({
+      id: this.id(), action: 'update', assignments: [...assignments],
+      ...(target === undefined ? {} : { target }), ...(where === undefined ? {} : { where }),
+    })
+  }
   mergeClause(when: MergeClause['when'], action: MergeClause['action'], assignments: readonly Assignment[] = [], predicate?: Expr): MergeClause {
     return immutable({ id: this.id(), when, action, assignments: [...assignments], ...(predicate === undefined ? {} : { predicate }) })
   }
   insert(target: MutationTarget, columns: readonly string[], rows: readonly (readonly Expr[])[], expectationOrOptions: AffectedRowsExpectation | InsertOptions = affectedRows.unconstrained()): InsertMutation {
     const options = isAffectedRows(expectationOrOptions) ? { affectedRows: expectationOrOptions } : expectationOrOptions
-    return immutable({ kind: 'insert', id: this.id(), target: targetReference(target), columns: [...columns], rows: rows.map((row) => [...row]), conflict: options.conflict ?? 'error', ...mutationFields(options) })
+    return immutable({ kind: 'insert', id: this.id(), target: targetReference(target), columns: [...columns], rows: rows.map((row) => [...row]), conflict: options.conflict ?? 'error', ...(options.upsertClauses === undefined ? {} : { upsertClauses: [...options.upsertClauses] }), ...targetMutationFields(options) })
+  }
+  insertSelect(target: MutationTarget, columns: readonly string[], source: Query, options: InsertOptions = {}): InsertMutation {
+    return immutable({ kind: 'insert', id: this.id(), target: targetReference(target), columns: [...columns], rows: [], source, conflict: options.conflict ?? 'error', ...(options.upsertClauses === undefined ? {} : { upsertClauses: [...options.upsertClauses] }), ...targetMutationFields(options) })
+  }
+  insertDefault(target: MutationTarget, options: InsertOptions = {}): InsertMutation {
+    return immutable({ kind: 'insert', id: this.id(), target: targetReference(target), columns: [], rows: [[]], conflict: options.conflict ?? 'error', ...(options.upsertClauses === undefined ? {} : { upsertClauses: [...options.upsertClauses] }), ...targetMutationFields(options) })
   }
   update(target: MutationTarget, assignments: readonly Assignment[], options: UpdateOptions = {}): UpdateMutation {
-    return immutable({ kind: 'update', id: this.id(), target: targetReference(target), assignments: [...assignments], ...(options.where === undefined ? {} : { where: options.where }), ...mutationFields(options) })
+    return immutable({
+      kind: 'update', id: this.id(), target: targetReference(target), assignments: [...assignments],
+      ...(options.where === undefined ? {} : { where: options.where }),
+      ...(options.conflict === undefined ? {} : { conflict: options.conflict }),
+      ...(options.from === undefined ? {} : { from: options.from }),
+      ...(options.fromAlias === undefined ? {} : { fromAlias: options.fromAlias }),
+      ...targetMutationFields(options),
+    })
   }
   delete(target: MutationTarget, options: DeleteOptions = {}): DeleteMutation {
-    return immutable({ kind: 'delete', id: this.id(), target: targetReference(target), ...(options.where === undefined ? {} : { where: options.where }), ...mutationFields(options) })
+    return immutable({ kind: 'delete', id: this.id(), target: targetReference(target), ...(options.where === undefined ? {} : { where: options.where }), ...targetMutationFields(options) })
   }
   upsert(target: MutationTarget, columns: readonly string[], row: readonly Expr[], constraint: string, updates: readonly Assignment[], options: UpsertOptions = {}): UpsertMutation {
-    return immutable({ kind: 'upsert', id: this.id(), target: targetReference(target), columns: [...columns], row: [...row], constraint, updates: [...updates], ...mutationFields(options) })
+    return immutable({ kind: 'upsert', id: this.id(), target: targetReference(target), columns: [...columns], row: [...row], constraint, updates: [...updates], ...(options.where === undefined ? {} : { where: options.where }), ...targetMutationFields(options) })
+  }
+  upsertSelect(target: MutationTarget, columns: readonly string[], source: Query, constraint: string, updates: readonly Assignment[], options: UpsertOptions = {}): UpsertMutation {
+    return immutable({ kind: 'upsert', id: this.id(), target: targetReference(target), columns: [...columns], row: [], source, constraint, updates: [...updates], ...(options.where === undefined ? {} : { where: options.where }), ...targetMutationFields(options) })
   }
   merge(target: MutationTarget, source: Query, on: Expr, clauses: readonly MergeClause[], options: MergeOptions = {}): MergeMutation {
-    return immutable({ kind: 'merge', id: this.id(), target: targetReference(target), source, on, clauses: [...clauses], ...mutationFields(options) })
+    return immutable({ kind: 'merge', id: this.id(), target: targetReference(target), source, on, clauses: [...clauses], ...targetMutationFields(options) })
   }
   statefulCall(moduleId: number, operationId: number, args: readonly Expr[], options: MutationOptions = {}): RegisteredStatefulCall {
     return immutable({ kind: 'stateful_call', id: this.id(), moduleId, operationId, args: [...args], ...mutationFields(options) })
@@ -183,6 +270,15 @@ function mutationFields(options: MutationOptions): Pick<InsertMutation, 'affecte
     affectedRows: options.affectedRows ?? affectedRows.unconstrained(),
     ...(options.returning === undefined ? {} : { returning: options.returning }),
     ...(options.label === undefined ? {} : { label: options.label }),
+  }
+}
+
+function targetMutationFields(options: TargetMutationOptions): Pick<InsertMutation, 'affectedRows' | 'returning' | 'label' | 'alias' | 'ctes' | 'recursive'> {
+  return {
+    ...mutationFields(options),
+    ...(options.alias === undefined ? {} : { alias: options.alias }),
+    ...(options.ctes === undefined ? {} : { ctes: [...options.ctes] }),
+    ...(options.recursive === true ? { recursive: true } : {}),
   }
 }
 

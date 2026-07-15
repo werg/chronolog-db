@@ -92,7 +92,18 @@ export function executeCompiledQuery(
   return withProfiledStatement(database, query.sql, mode, (statement) => {
     statement.setReturnArrays?.(true)
     statement.setReadBigInts?.(true)
-    const backendRows = statement.all(...bindBackendParameters(query.parameters, context))
+    let backendRows: Array<Record<string, unknown> | unknown[]>
+    try {
+      backendRows = statement.all(...bindBackendParameters(query.parameters, context))
+    } catch (error) {
+      // Preparation and profile validation happen before this callback. Mapping
+      // only step-time SQLITE_ERROR keeps backend/profile mismatches fatal while
+      // giving deterministic expression failures a stable consensus outcome.
+      if (mode === 'consensus_precondition' && primarySqliteCode(error) === 1) {
+        throw new DeterministicIrRejection('SQL_EVALUATION_ERROR')
+      }
+      throw error
+    }
     if (backendRows.length > maximumRows) throw new DeterministicIrRejection('RESULT_ROW_LIMIT')
     let rows = backendRows.map((backendRow) => {
       if (!Array.isArray(backendRow)) throw new Error('BACKEND_ARRAY_ROW_REQUIRED')
@@ -123,8 +134,18 @@ export function executeCompiledMutation(
   sqlLimits: Partial<SqlRuntimeLimits> = {},
 ): bigint {
   try {
-    const result = withProfiledStatement(database, mutation.sql, 'consensus_mutation', (profiled) =>
-      profiled.run(...bindBackendParameters(mutation.parameters, context)), sqlLimits)
+    const result = withProfiledStatement(database, mutation.sql, 'consensus_mutation', (profiled) => {
+      try {
+        return profiled.run(...bindBackendParameters(mutation.parameters, context))
+      } catch (error) {
+        // As with queries, this catches execution only. Prepare/profile errors
+        // remain operational failures and are never canonicalized as outcomes.
+        if (primarySqliteCode(error) === 1) {
+          throw new DeterministicIrRejection('SQL_EVALUATION_ERROR')
+        }
+        throw error
+      }
+    }, sqlLimits)
     const changes = typeof result.changes === 'bigint' ? result.changes : BigInt(result.changes)
     assertAffectedRows(mutation.source.affectedRows, changes, mutation.id)
     return changes

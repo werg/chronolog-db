@@ -30,6 +30,7 @@
     "@chronolog/compiler-sqlite": "workspace:*",
     "@chronolog/ir": "workspace:*",
     "@chronolog/materializer-doltlite": "workspace:*",
+    "@chronolog/runtime-workerd": "workspace:*",
     "@chronolog/node-core": "workspace:*",
     "@chronolog/protocol": "workspace:*",
     "@chronolog/rpc": "workspace:*",

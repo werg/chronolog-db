@@ -8,6 +8,7 @@
     "@chronolog/compiler-sqlite": "workspace:*",
     "@chronolog/ir": "workspace:*",
     "@chronolog/kernels": "workspace:*",
+    "@chronolog/materializer": "workspace:*",
     "@chronolog/protocol": "workspace:*",
     "@dolthub/doltlite": "0.11.29"
   }

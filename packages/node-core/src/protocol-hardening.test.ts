@@ -1,5 +1,9 @@
 import { IrBuilder, values } from '@chronolog/ir'
 import {
+  createDoltLiteLegacyMaterializationRuntime,
+  type DoltLiteLegacyMaterializer,
+} from '@chronolog/materializer-doltlite'
+import {
   encodeTransactionCore,
   encodeValidatorAttestation,
   generateEd25519KeyPair,
@@ -325,12 +329,12 @@ function makeNode(
     identity,
     transport,
     membership,
-    materializer: fakeMaterializer(pins),
+    materialization: createDoltLiteLegacyMaterializationRuntime(fakeMaterializer(pins)),
     ...overrides,
   })
 }
 
-function fakeMaterializer(pins: Pins): ChronologNodeOptions['materializer'] {
+function fakeMaterializer(pins: Pins): DoltLiteLegacyMaterializer {
   let revision = 0n
   let orderLength = 0
   return {
@@ -344,7 +348,7 @@ function fakeMaterializer(pins: Pins): ChronologNodeOptions['materializer'] {
       return null
     },
     close: () => {},
-  } as unknown as ChronologNodeOptions['materializer']
+  } as unknown as DoltLiteLegacyMaterializer
 }
 
 function transactionCore(authorId: Uint8Array, pins: Pins, authorTimestampMs: bigint): TransactionCore {

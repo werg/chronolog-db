@@ -19,8 +19,6 @@ import {
   type Query,
   type TransactionProgram,
 } from '@chronolog/ir'
-import type { ChronologNode } from '@chronolog/node-core'
-
 import type { ChronologRpcService, RpcCallContext } from './contract.js'
 import { ChronologRpcError } from './errors.js'
 import {
@@ -70,50 +68,25 @@ import {
   type ValidateDraftResponse,
   type ValidatorWatermark,
 } from './types.js'
+import type {
+  ChronologRpcNodeService,
+  DraftExecutionContext,
+  IrQueryExecution,
+  NodeRpcIrBackend,
+} from './service-contract.js'
 
-export interface DraftExecutionContext {
-  readonly groupId: Uint8Array
-  readonly membershipRevision: Uint8Array
-  readonly validationPolicy: Uint8Array
-  readonly authorId: Uint8Array
-  readonly authorTimestampMs: bigint
-  readonly transactionNonce: Uint8Array
-}
-
-export interface IrQueryExecution {
-  readonly revision: bigint
-  readonly orderLength: number
-  readonly schemaDigest: Uint8Array
-  readonly executionManifestDigest: Uint8Array
-  readonly result: IrQueryResult
-}
-
-export interface LocalSqlExecution {
-  readonly revision: bigint
-  readonly orderLength: number
-  readonly columns: readonly { readonly name: string; readonly declaredType?: string }[]
-  readonly rows: readonly (readonly LocalSqlValue[])[]
-}
-
-/**
- * Adapter implemented by the IR materializer/compiler boundary. The RPC layer
- * owns wire decoding and draft provenance; this adapter owns catalog-aware IR
- * validation, immutable reader selection, and execution.
- */
-export interface NodeRpcIrBackend {
-  readonly revision: bigint
-  readonly orderLength: number
-  readonly schemaDigest: Uint8Array
-  readonly executionManifestDigest: Uint8Array
-  query(query: Query, options: { readonly atRevision: bigint; readonly context?: DraftExecutionContext }): IrQueryExecution | Promise<IrQueryExecution>
-  localQuery(
-    sql: string,
-    parameters: readonly LocalSqlValue[],
-    options: { readonly atRevision: bigint },
-  ): LocalSqlExecution | Promise<LocalSqlExecution>
-  validateQuery(query: Query): readonly CompilerDiagnostic[]
-  validateMutation(mutation: Mutation): readonly CompilerDiagnostic[]
-}
+export type {
+  ChronologRpcNodeService,
+  DraftExecutionContext,
+  IrQueryExecution,
+  LocalSqlExecution,
+  NodeRpcIrBackend,
+  RpcNodeCandidate,
+  RpcNodeCandidateCore,
+  RpcNodeSettlementEvidence,
+  RpcNodeStatusSnapshot,
+  RpcNodeWatermark,
+} from './service-contract.js'
 
 interface StoredObservation {
   readonly id: string
@@ -163,7 +136,7 @@ interface PublishedLabelsEntry {
 }
 
 export interface NodeRpcServiceOptions {
-  readonly node: ChronologNode
+  readonly node: ChronologRpcNodeService
   readonly irBackend?: NodeRpcIrBackend
   readonly draftTtlMs?: number
   readonly maxDraftTtlMs?: number
@@ -184,7 +157,7 @@ export interface NodeRpcServiceOptions {
 }
 
 export class NodeRpcService implements ChronologRpcService {
-  readonly #node: ChronologNode
+  readonly #node: ChronologRpcNodeService
   readonly #ir: NodeRpcIrBackend
   readonly #draftTtlMs: number
   readonly #maxDraftTtlMs: number
@@ -664,7 +637,7 @@ export class NodeRpcService implements ChronologRpcService {
     const txId = utf8(request.transactionId)
     const candidate = this.#node.candidate(txId)
     if (!candidate) throw new ChronologRpcError('not_found', 'Unknown transaction')
-    const derived = this.#node.outcome(txId) as unknown as DerivedOutcome | null
+    const derived = this.#node.outcome(txId) as DerivedOutcome | null
     const status = await this.#node.status()
     const phase = derived === null
       ? candidate.state === 'admissible' ? 'admissible' : 'collecting_attestations'
@@ -1089,13 +1062,13 @@ interface PublishedProgram {
 }
 
 async function publishProgram(
-  node: ChronologNode,
+  node: ChronologRpcNodeService,
   input: { readonly program: TransactionProgram; readonly authorTimestampMs: bigint; readonly nonce: Uint8Array },
 ): Promise<PublishedProgram> {
   return node.publish({ ...input, nonce: Uint8Array.from(input.nonce) })
 }
 
-function nodeIrBackend(node: ChronologNode): NodeRpcIrBackend {
+function nodeIrBackend(node: ChronologRpcNodeService): NodeRpcIrBackend {
   return {
     get revision() { return node.materializedRevision },
     get orderLength() { return node.orderLength },

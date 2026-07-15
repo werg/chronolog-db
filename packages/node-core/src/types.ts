@@ -1,10 +1,10 @@
 import type { ControlStore, StoredAttestation, WatermarkPolicy } from '@chronolog/control-store'
 import type {
-  DeterministicMaterializer,
-  LocalSqlQueryResult,
-  LocalSqlValue,
-  MaterializedIrQueryResult,
-} from '@chronolog/materializer-doltlite'
+  ChronologMaterializationRuntime,
+  MaterializedLocalSqlResult,
+  MaterializedLocalSqlValue,
+  MaterializedQueryResult,
+} from '@chronolog/materializer'
 import type { Query, TransactionProgram } from '@chronolog/ir'
 import type {
   Ed25519KeyPair,
@@ -95,7 +95,7 @@ export interface ChronologNodeOptions {
   readonly validationPolicy: Uint8Array
   readonly identity: Ed25519KeyPair
   readonly transport: ChronologTransport
-  readonly materializer: DeterministicMaterializer
+  readonly materialization: ChronologMaterializationRuntime
   readonly membership: MembershipResolver
   readonly controlStore?: ControlStore
   readonly validator?: ValidatorOptions
@@ -151,7 +151,7 @@ export interface NodeStatus {
   readonly transport: TransportStatus
 }
 
-export type NodeIrQueryResult = MaterializedIrQueryResult
-export type NodeLocalSqlQueryResult = LocalSqlQueryResult
+export type NodeIrQueryResult = MaterializedQueryResult
+export type NodeLocalSqlQueryResult = MaterializedLocalSqlResult
 export type NodeQuery = Query
-export type NodeLocalSqlParameter = LocalSqlValue
+export type NodeLocalSqlParameter = MaterializedLocalSqlValue

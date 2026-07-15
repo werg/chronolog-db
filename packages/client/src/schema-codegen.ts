@@ -94,7 +94,7 @@ interface Names {
 
 function generatedNames(tables: readonly SchemaTable[]): ReadonlyMap<number, Names> {
   const usedValues = new Set<string>()
-  const usedTypes = new Set<string>()
+  const usedTypes = new Set<string>(['ChronologSqlReadDatabase'])
   const result = new Map<number, Names>()
   for (const table of tables) {
     const rawValue = TYPESCRIPT_RESERVED.has(table.name) ? `${table.name}Table` : table.name
@@ -167,6 +167,12 @@ function renderModule(
     lines.push(`  primaryKey: [${primaryNames.map((name) => JSON.stringify(name)).join(', ')}],`)
     lines.push('})')
   }
+  lines.push('', 'export interface ChronologSqlReadDatabase {')
+  for (const table of tables) {
+    const generated = names.get(table.id)!
+    lines.push(`  readonly ${JSON.stringify(table.name)}: ${generated.type}Row`)
+  }
+  lines.push('}')
   lines.push('')
   return lines.join('\n')
 }

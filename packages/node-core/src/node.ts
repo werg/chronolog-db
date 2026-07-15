@@ -11,11 +11,11 @@ import {
 import type { Mutation, Query } from '@chronolog/ir'
 import type {
   AdmittedTransaction,
-  LocalSqlQueryResult,
-  LocalSqlValue,
-  MaterializedIrQueryResult,
-  TransactionOutcome,
-} from '@chronolog/materializer-doltlite'
+  MaterializedLocalSqlResult,
+  MaterializedLocalSqlValue,
+  MaterializedQueryResult,
+  MaterializedTransactionOutcome,
+} from '@chronolog/materializer'
 import {
   decodeTransactionCore,
   decodeValidatorAttestation,
@@ -109,12 +109,14 @@ export class ChronologNode {
   get groupId(): Uint8Array { return this.#options.groupId.slice() }
   get membershipRevision(): Uint8Array { return this.#options.membershipRevision.slice() }
   get validationPolicy(): Uint8Array { return this.#options.validationPolicy.slice() }
-  get schemaDigest(): Uint8Array { return this.#options.materializer.schemaDigest }
-  get executionManifestDigest(): Uint8Array { return this.#options.materializer.executionManifestDigest }
+  get schemaDigest(): Uint8Array { return this.#options.materialization.queries.schemaDigest }
+  get executionManifestDigest(): Uint8Array {
+    return this.#options.materialization.queries.executionManifestDigest
+  }
   get controlStore(): ControlStore { return this.#control }
   get revision(): bigint { return this.#revision }
-  get materializedRevision(): bigint { return this.#options.materializer.revision }
-  get orderLength(): number { return this.#options.materializer.orderLength }
+  get materializedRevision(): bigint { return this.#options.materialization.queries.revision }
+  get orderLength(): number { return this.#options.materialization.queries.orderLength }
 
   reserveTransactionContext(): ReservedTransactionContext {
     this.#assertReady()
@@ -268,29 +270,29 @@ export class ChronologNode {
 
   queryIr(
     query: Query,
-    options?: Parameters<ChronologNodeOptions['materializer']['queryIr']>[1],
-  ): Promise<MaterializedIrQueryResult> {
+    options?: Parameters<ChronologNodeOptions['materialization']['queries']['queryIr']>[1],
+  ): Promise<MaterializedQueryResult> {
     return this.#materializerQueryIr(query, options)
   }
 
   localSql(
     sql: string,
-    parameters: readonly LocalSqlValue[] = [],
-    options?: Parameters<ChronologNodeOptions['materializer']['localSql']>[2],
-  ): LocalSqlQueryResult {
+    parameters: readonly MaterializedLocalSqlValue[] = [],
+    options?: Parameters<ChronologNodeOptions['materialization']['queries']['localSql']>[2],
+  ): MaterializedLocalSqlResult {
     return this.#materializerLocalSql(sql, parameters, options)
   }
 
-  validateQuery(query: Query): ReturnType<ChronologNodeOptions['materializer']['validateQuery']> {
-    return this.#options.materializer.validateQuery(query)
+  validateQuery(query: Query): ReturnType<ChronologNodeOptions['materialization']['queries']['validateQuery']> {
+    return this.#options.materialization.queries.validateQuery(query)
   }
 
-  validateMutation(mutation: Mutation): ReturnType<ChronologNodeOptions['materializer']['validateMutation']> {
-    return this.#options.materializer.validateMutation(mutation)
+  validateMutation(mutation: Mutation): ReturnType<ChronologNodeOptions['materialization']['queries']['validateMutation']> {
+    return this.#options.materialization.queries.validateMutation(mutation)
   }
 
-  outcome(txId: Uint8Array): TransactionOutcome | null {
-    return this.#options.materializer.outcome(txId)
+  outcome(txId: Uint8Array): MaterializedTransactionOutcome | null {
+    return this.#options.materialization.queries.outcome(txId)
   }
 
   outcomeChangedByReplay(txId: Uint8Array): boolean {
@@ -345,8 +347,8 @@ export class ChronologNode {
       admitted: this.#control.orderedTransactionIds().length,
       processedTransportRecords: this.#seen.size,
       materializationPending: this.#materializationPending,
-      materializedRevision: this.#options.materializer.revision,
-      orderLength: this.#options.materializer.orderLength,
+      materializedRevision: this.#options.materialization.queries.revision,
+      orderLength: this.#options.materialization.queries.orderLength,
       schemaDigest: this.schemaDigest,
       executionManifestDigest: this.executionManifestDigest,
       validating: this.#options.validator !== undefined,
@@ -386,7 +388,7 @@ export class ChronologNode {
     })
     this.#control.flush()
     this.#events.close()
-    this.#options.materializer.close()
+    await this.#options.materialization.close()
     await this.#options.transport.close()
   }
 
@@ -620,7 +622,34 @@ export class ChronologNode {
         core,
       }
     })
-    const revision = await this.#options.materializer.materialize(ordered)
+    const coordinated = await this.#options.materialization.coordinator.materialize(ordered)
+    if (coordinated !== null) {
+      const published = await this.#options.materialization.publications.publish(
+        coordinated.publication,
+      )
+      if (
+        published.revision !== coordinated.revision.revision ||
+        published.orderLength !== coordinated.revision.orderLength ||
+        !equalBytes(published.schemaDigest, coordinated.revision.schemaDigest) ||
+        !equalBytes(published.executionManifestDigest, coordinated.revision.manifestDigest)
+      ) {
+        throw new Error('MATERIALIZATION_PUBLICATION_RESULT_MISMATCH')
+      }
+    }
+    const reconciled = await this.#options.materialization.publications.reconcile({
+      targetOrderLength: ordered.length,
+      ...(coordinated === null ? {} : { targetRevision: coordinated.revision.revision }),
+    })
+    const queries = this.#options.materialization.queries
+    if (
+      reconciled.revision !== queries.revision ||
+      reconciled.orderLength !== ordered.length ||
+      reconciled.orderLength !== queries.orderLength ||
+      !equalBytes(reconciled.schemaDigest, queries.schemaDigest) ||
+      !equalBytes(reconciled.executionManifestDigest, queries.executionManifestDigest)
+    ) {
+      throw new Error('MATERIALIZATION_RECONCILIATION_RESULT_MISMATCH')
+    }
     this.#materializationPending = false
     this.#materializationRetryMs = 100
     if (this.#materializationDebounceTimer) {
@@ -631,8 +660,8 @@ export class ChronologNode {
       clearTimeout(this.#materializationRetryTimer)
       this.#materializationRetryTimer = undefined
     }
-    if (revision !== null) {
-      for (const change of revision.outcomeChanges) {
+    if (coordinated !== null) {
+      for (const change of coordinated.revision.outcomeChanges) {
         if (change.previous !== null && change.previous !== change.current) {
           this.#replayedOutcomes.add(this.#idKey(change.txId))
         }
@@ -917,16 +946,16 @@ export class ChronologNode {
   #randomBytes(length: number): Uint8Array { return this.#options.random?.bytes(length) ?? randomBytes(length) }
   #materializerQueryIr(
     query: Query,
-    options?: Parameters<ChronologNodeOptions['materializer']['queryIr']>[1],
-  ): Promise<MaterializedIrQueryResult> {
-    return this.#options.materializer.queryIr(query, options)
+    options?: Parameters<ChronologNodeOptions['materialization']['queries']['queryIr']>[1],
+  ): Promise<MaterializedQueryResult> {
+    return this.#options.materialization.queries.queryIr(query, options)
   }
   #materializerLocalSql(
     sql: string,
-    parameters: readonly LocalSqlValue[],
-    options?: Parameters<ChronologNodeOptions['materializer']['localSql']>[2],
-  ): LocalSqlQueryResult {
-    return this.#options.materializer.localSql(sql, parameters, options)
+    parameters: readonly MaterializedLocalSqlValue[],
+    options?: Parameters<ChronologNodeOptions['materialization']['queries']['localSql']>[2],
+  ): MaterializedLocalSqlResult {
+    return this.#options.materialization.queries.localSql(sql, parameters, options)
   }
   #groupRoute(): Uint8Array { return this.#options.groupRoute ?? this.#options.groupId }
   #idKey(value: Uint8Array): string { return Buffer.from(value).toString('base64url') }

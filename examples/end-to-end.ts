@@ -14,7 +14,11 @@ import {
   type Query,
   type TransactionProgram,
 } from '@chronolog/ir'
-import { DeterministicMaterializer, readNativeEngineInfo } from '@chronolog/materializer-doltlite'
+import {
+  DeterministicMaterializer,
+  createDoltLiteLegacyMaterializationRuntime,
+  readNativeEngineInfo,
+} from '@chronolog/materializer-doltlite'
 import { ChronologNode, type MembershipResolver } from '@chronolog/node-core'
 import { equalBytes, generateEd25519KeyPair } from '@chronolog/protocol'
 import { InProcessRpcTransport, NodeRpcService } from '@chronolog/rpc'
@@ -53,7 +57,7 @@ const node = new ChronologNode({
   validationPolicy,
   identity,
   transport: network.createNode('example'),
-  materializer,
+  materialization: createDoltLiteLegacyMaterializationRuntime(materializer),
   membership,
   validator: { capabilityId: capability, cutoffLagMs: Number.MAX_SAFE_INTEGER },
 })

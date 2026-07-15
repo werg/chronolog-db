@@ -1,12 +1,21 @@
 # Chronolog Deterministic SQL Dialect and Relational IR
 
-Status: Draft specification for the Chronolog deterministic relational language
+Status: transitional implementation reference; superseded for protocol design
+by
+[Specification 10](implementation-specs/10-deterministic-sql-transactions.md)
 
-This document specifies the target consensus language for Chronolog DB. It is
-normative for the deterministic relational intermediate representation (IR),
-its execution semantics, and its mapping to DoltLite. Chronolog is an unreleased
-prototype, so the current raw-SQL transaction structures are replaced directly.
-There is no legacy transaction format, compatibility reducer, or data migration.
+This document describes the semantics of the current relational IR and SQLite
+renderer while the SQL-first cutover is implemented. It is not an alternative
+signed protocol. Where it describes canonical IR, schema manifests, global
+schema digests, special schema commands, or IR-only client/RPC surfaces as the
+target architecture, Specification 10 is authoritative. Parser/compiler
+compatibility work may continue through this private IR only when it moves the
+SQL frontend toward that cutover without expanding the public protocol.
+
+This document specifies the current deterministic relational intermediate
+representation (IR), its execution semantics, and its mapping to DoltLite.
+Chronolog is an unreleased prototype, so there is no compatibility reducer or
+data migration for replacing this representation during the SQL-first cutover.
 
 The key words **MUST**, **MUST NOT**, **REQUIRED**, **SHALL**, **SHALL NOT**,
 **SHOULD**, **SHOULD NOT**, **RECOMMENDED**, **NOT RECOMMENDED**, **MAY**, and
@@ -203,15 +212,17 @@ canonical encoding rules. Every IR node is a tagged structure with:
 - bounded depth and item counts; and
 - no reliance on map iteration order.
 
-Identifiers are UTF-8 strings but the portable core restricts schema object,
-column, alias, rule, and extension names to:
+Identifiers are nonempty, well-formed UTF-8 strings without NUL. Renderers
+double-quote every identifier and escape embedded double quotes, so ordinary
+SQL names may contain whitespace, punctuation, keywords, mixed case, and
+Unicode without an arbitrary naming convention or 63-byte limit.
 
-```text
-[a-z][a-z0-9_]{0,62}
-```
-
-Names are case-sensitive at the IR level. Renderers quote every identifier and
-MUST NOT depend on SQLite's case folding. The `chronolog_` prefix is reserved.
+Name lookup follows SQLite: ASCII letters compare case-insensitively even for
+quoted identifiers, while non-ASCII characters remain byte-distinct. Schema
+validation rejects names that collide under that comparison. The `chronolog_`,
+`sqlite_`, `dolt_`, `doltlite_`, and `pragma_` prefixes, plus backend eponymous
+virtual-table names, are reserved for main-database schema objects. They do not
+prohibit ordinary column, alias, projection, or constraint names.
 
 Every precondition, command, schema object, expression, projection, ordering
 term, and extension invocation carries a stable ID within its containing
@@ -253,6 +264,16 @@ Profiles MUST specify:
 Core arithmetic never rounds implicitly. The portable backend SHOULD store
 decimal values as canonical text or a tagged binary encoding and implement
 operations with the registered deterministic numeric kernel.
+
+The implemented Int64 path checks negation, addition, subtraction,
+multiplication, division, remainder, and left shift. SQLite REAL overflow
+promotion and zero-divisor Null fallback are intercepted before a result is
+observed and become `SQL_EVALUATION_ERROR`; no floating value enters the
+canonical result or stored state. Shift counts are restricted to `[0, 63]`,
+left shift proves reversibility, and bitwise XOR is lowered from exact bitwise
+operations. TimestampMs plus/minus DurationMs, TimestampMs differences,
+DurationMs addition/subtraction, and DurationMs scaling by Int64 use the same
+checked representation.
 
 ### 7.4 Binary floating point
 
@@ -498,9 +519,30 @@ conversions. Core expressions include:
 - text and blob concatenation, length, slicing, and search;
 - conditional expressions;
 - deterministic casts;
+- compiler-owned pinned SQLite functions for exact text/blob construction and
+  inspection, null/conditional selection, pattern predicates, scalar extrema,
+  hexadecimal and Unicode conversion, planner identity hints, and checked
+  integer magnitude/sign;
 - JSON expressions;
 - registered pure scalar functions; and
 - scalar, existence, membership, and quantified subqueries.
+
+Compiler-owned functions are distinct from registered extension functions and
+need no schema registration. The implemented set is `char`, `concat`,
+`concat_ws`, `length`, `octet_length`, `lower`, `upper`, `trim`, `ltrim`,
+`rtrim`, `replace`, `instr`, `substr`, `substring`, `hex`, `coalesce`,
+`ifnull`, `nullif`, `if`, `iif`, `likely`, `unlikely`, the `glob()` and
+`like()` function forms, scalar `min()`/`max()`, `quote`, `typeof`, `unhex`,
+`unicode`, `unistr`,
+`unistr_quote`, `zeroblob`, `abs`, and `sign`. Integer `abs` overflow is a
+stable `SQL_EVALUATION_ERROR` consensus outcome, attributed to its precondition
+or command; local reads retain native backend diagnostics.
+
+Connection-history functions, randomness, extension loading, engine-build and
+physical-offset introspection, current date/time forms, optional compile-time
+functions, and floating or dynamic-format functions are not admitted through
+this path. Remaining JSON1 routines require explicit canonical JSON IR
+semantics rather than manifest-free generic scalar typing.
 
 ### 10.1 Three-valued logic
 
@@ -556,16 +598,21 @@ Every consensus query declares exactly one result mode.
 
 #### Scalar
 
-The query MUST return exactly one row and one value. Zero rows or additional
-rows/columns produce `RESULT_SHAPE_MISMATCH`.
+The query MUST return exactly one column and at most one row. Zero rows
+canonicalize as explicit absence, distinct from one row containing `NULL`.
+Additional rows or a different column count produce `RESULT_SHAPE_MISMATCH`.
 
 #### Ordered
 
-Row sequence is significant. The query MUST provide a provably total order.
-The final ordering terms MUST distinguish every possible result row.
+Row sequence is significant. Authored `ORDER BY` terms are preserved as the
+leading order. The compiler completes ties with hidden canonical projected-row
+terms; if no `ORDER BY` is present, explicitly requesting ordered mode uses the
+canonical projected row as the complete order. Rows with identical canonical
+projections are observationally interchangeable.
 
-A primary or non-null unique key is a sufficient final tie-breaker. A nullable
-unique constraint is not sufficient because multiple nulls may exist.
+Candidate primary and non-null unique keys may provide a narrower completion
+when their use does not introduce a hidden schema dependency. Applications do
+not provide ordering-proof flags.
 
 #### Multiset
 
@@ -582,7 +629,10 @@ and deduplicated. Set mode must be requested explicitly; it is not the default.
 
 `LIMIT`, `OFFSET`, top/bottom selection, window frames, order-sensitive
 aggregates, and scalar subqueries that may observe more than one row require a
-total order. An unordered physical scan MUST NOT select the winner.
+compiler-completed total order. The compiler adds deterministic tie-breakers
+where relational provenance permits it and rejects only when the relevant
+intermediate row identity cannot be ordered. An unordered physical scan MUST
+NOT select the winner.
 
 ### 11.3 Grouping and aggregates
 
@@ -596,6 +646,21 @@ maximum, Boolean all/any, and explicitly ordered collection aggregates.
   registered value semantics.
 - Floating aggregates require a registered numeric profile.
 - Bare non-grouped columns beside aggregates are prohibited.
+
+The currently implemented portable subset includes `COUNT(*)`, `COUNT(expr)`,
+`COUNT(DISTINCT expr)`, `MIN`, `MAX`, Boolean `EVERY`/`BOOL_AND`, and Boolean
+`ANY`/`SOME`/`BOOL_OR`, including standard aggregate
+`FILTER (WHERE ...)`, null behavior, and compiler-derived result nullability.
+`MIN`/`MAX` are enabled only for logical
+types whose canonical storage order is the declared logical order. Checked
+integer/decimal sums, floating aggregates, and order-sensitive aggregates stay
+gated until their pinned kernels or canonical input-order plans are available.
+SQLite integer `SUM` cannot be admitted merely by normalizing overflow: whether
+an intermediate overflow occurs can change with scan order even when the same
+multiset has an in-range mathematical sum. Floating accumulation additionally
+depends on evaluation order and an unregistered numeric profile. Collection,
+text, and JSON aggregates need an explicit total input order and bounded result
+plan rather than SQLite's incidental visitation order.
 
 ### 11.4 Window functions
 
@@ -643,10 +708,13 @@ optional returning query and result mode
 
 ### 12.1 Insert
 
-Insert lists every target column or invokes an IR-defined default. Every
-primary-key component MUST be explicit after default expansion. Multirow input
-has a canonical row order. `INSERT ... SELECT` is supported only from a query
-with a deterministic result mode; source rows are applied in canonical result
+Insert lists every target column or invokes `DEFAULT VALUES` through the
+canonical empty-column/single-empty-row form. Every primary-key component MUST
+be explicit or supplied by a deterministic schema default. Multirow input has
+a canonical row order. `INSERT ... SELECT` preserves authored ordering and
+then orders remaining ties by every projected logical value with explicit null
+placement. Scalar, ordered, set, and multiset sources are therefore accepted
+without making conflict handling depend on SQLite's unspecified visitation
 order.
 
 ### 12.2 Upsert and conflict policy
@@ -662,8 +730,23 @@ delete_then_insert
 ```
 
 The affected existing row is identified by the named key, never by backend
-conflict discovery order. `delete_then_insert` defines rule and foreign-key
-effects explicitly and does not inherit SQLite `REPLACE` quirks.
+conflict discovery order. Named SQLite upsert supports `DO NOTHING`,
+`DO UPDATE SET`, and an optional `DO UPDATE ... WHERE` predicate. Its target is
+always the exact column list of the named primary-key or unique constraint.
+The input may be either one explicit values row or a typed query source;
+query-source upserts receive the same width, type, and canonical application
+ordering checks as ordinary insert-select.
+
+For standard SQLite insert compatibility, the separately signed insert
+policies `ignore` and `replace` lower explicitly to `INSERT OR IGNORE` and
+`INSERT OR REPLACE`. `replace` intentionally has the pinned SQLite
+delete-conflicting-row/insert-new-row behavior and is never substituted for a
+named upsert update. A future portable `delete_then_insert` rule plan remains a
+distinct higher-level operation.
+
+Insert, update, delete, and upsert may carry quoted target aliases. The alias is
+part of canonical IR rather than reconstructed from SQL text; `excluded`
+remains reserved as SQLite's incoming-row scope during upsert.
 
 ### 12.3 Update and delete
 
@@ -674,6 +757,28 @@ processed in primary-key order unless another total order is explicit.
 Update expressions read the pre-update row unless a command explicitly refers
 to a preceding assignment through a sequential-assignment construct. The
 portable default evaluates all assignments from the same old row.
+
+SQLite `UPDATE OR IGNORE` and `UPDATE OR REPLACE` are accepted only for a
+compiler-proven single target row. `UPDATE ... FROM` is accepted when its named
+query source is compiler-proven to produce at most one row globally, or a
+simple source table is joined through a complete projected primary/unique key.
+General multirow conflict updates and more complex update joins are gated until
+the compiler can prove a canonical per-target source mapping; relying on
+SQLite's physical row choice is not deterministic SQL semantics.
+
+Surface `OR ABORT`, `OR FAIL`, and `OR ROLLBACK` normalize to the ordinary
+`error` policy because every constraint failure rejects and rolls back the
+whole atomic candidate. Row-value `SET` syntax normalizes to simultaneous
+assignments once parsed, and `main.` is the application schema rather than a
+distinct object namespace. UPDATE/DELETE `ORDER BY ... LIMIT` depends on an optional
+SQLite build flag and does not control physical mutation order; it remains
+gated pending canonical primary-key subset lowering.
+
+The current compatibility frontend uses a typed parser generated from SQLite's
+`parse.y` and lowers `DEFAULT VALUES`, `REPLACE INTO`, `UPDATE OR ...`, chained
+`ON CONFLICT ... DO ...`, `UPDATE ... FROM`, row-value `SET`, mutation CTEs,
+and `main.` as the application schema. The parser is a client adapter into the
+current transitional canonical IR; it is not a second signed SQL protocol.
 
 ### 12.4 Merge
 
@@ -705,6 +810,13 @@ Returning is a query over affected rows with scalar, ordered, multiset, or set
 semantics. Returning data may be committed to the transaction's expected
 effects or exposed diagnostically. It MUST be stepped and bounded
 incrementally.
+
+The current implementation rejects mutation `RETURNING`: the executor returns
+only `changes()`, the accepted-result-v1 digest frames only precondition digests
+and affected counts, and RPC outcomes contain no typed row envelope. SQLite's
+RETURNING row order is also unspecified. A durable implementation therefore
+needs a versioned result envelope and digest/RPC/client support, not just a
+rendered SQL clause.
 
 ## 13. Preconditions
 
@@ -833,7 +945,7 @@ preconditions.
 
 The renderer identity and digest are part of the execution manifest. It SHALL:
 
-- quote all identifiers;
+- validate and quote all identifiers;
 - use positional placeholders in deterministic depth-first IR traversal order;
 - bind every value with an exact logical/storage type;
 - emit explicit column lists, collations, null placement, conflict policies,

@@ -254,6 +254,35 @@ describe('ChronologClient canonical IR surface', () => {
     await expect(client.query(scalarQuery, [int64(1n)])).rejects.toBeInstanceOf(ClientSchemaMismatchError)
   })
 
+  it('accepts structurally compiled SQL from external query builders for local reads', async () => {
+    const localSql = vi.fn(async (_request) => ({
+      revision: revision('4'),
+      result: {
+        columns: [{ name: 'value' }],
+        rows: [[{ kind: 'integer' as const, value: '42' }]],
+        truncated: false,
+        consensusSafe: false as const,
+      },
+    }))
+    const client = clientFor(service({ localSql }))
+
+    const response = await client.queryLocalSql({
+      sql: 'SELECT value FROM accounts WHERE id = ?',
+      parameters: [42n],
+    }, { maxRows: 5 })
+
+    expect(localSql).toHaveBeenCalledWith(expect.objectContaining({
+      sql: 'SELECT value FROM accounts WHERE id = ?',
+      parameters: [{ kind: 'integer', value: '42' }],
+      maxRows: 5,
+    }), expect.anything())
+    expect(response.result.rows).toEqual([[42n]])
+    expect(response.result.consensusSafe).toBe(false)
+    await expect(client.queryLocalSql({ sql: 'SELECT ?', parameters: [new Date()] }))
+      .rejects.toThrow('Local SQL parameters')
+    expect(localSql).toHaveBeenCalledTimes(1)
+  })
+
   it('constructs exact logical values and copies mutable input', () => {
     expect(() => int64(Number.MAX_SAFE_INTEGER + 1)).toThrow('safe integer')
     expect(() => text('\ud800')).toThrow('unpaired UTF-16')

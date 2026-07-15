@@ -4,7 +4,11 @@ import { join } from 'node:path'
 
 import { createCoreExecutionManifest } from '@chronolog/compiler-sqlite'
 import { IrBuilder, SchemaBuilder, logicalTypes, values } from '@chronolog/ir'
-import { DeterministicMaterializer, readNativeEngineInfo } from '@chronolog/materializer-doltlite'
+import {
+  DeterministicMaterializer,
+  createDoltLiteLegacyMaterializationRuntime,
+  readNativeEngineInfo,
+} from '@chronolog/materializer-doltlite'
 import { equalBytes, generateEd25519KeyPair } from '@chronolog/protocol'
 import { MemoryTransportNetwork } from '@chronolog/transport-ssb'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -74,7 +78,7 @@ describe('ChronologNode end-to-end', () => {
       validationPolicy: policy,
       identity: writer,
       transport: writerTransport,
-      materializer: writerMaterializer,
+      materialization: createDoltLiteLegacyMaterializationRuntime(writerMaterializer),
       membership,
       envelopeCipher: createEpochEnvelopeCipher(epochKey, 1n),
     })
@@ -84,7 +88,7 @@ describe('ChronologNode end-to-end', () => {
       validationPolicy: policy,
       identity: validator,
       transport: validatorTransport,
-      materializer: validatorMaterializer,
+      materialization: createDoltLiteLegacyMaterializationRuntime(validatorMaterializer),
       membership,
       validator: { capabilityId: capability, cutoffLagMs: 120_000 },
       envelopeCipher: createEpochEnvelopeCipher(epochKey, 1n),

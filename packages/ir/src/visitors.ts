@@ -11,7 +11,10 @@ import type {
   Query,
   Relation,
   TransactionProgram,
+  UpsertClause,
   WindowDefinition,
+  WindowFrame,
+  WindowSpecification,
 } from './types.js'
 
 export interface IrVisitor {
@@ -26,6 +29,7 @@ export interface IrVisitor {
   readonly window?: (window: WindowDefinition) => void
   readonly compound?: (compound: CompoundTerm) => void
   readonly mergeClause?: (clause: MergeClause) => void
+  readonly upsertClause?: (clause: UpsertClause) => void
 }
 
 export function walkExpr(expr: Expr, visitor: IrVisitor): void {
@@ -33,14 +37,33 @@ export function walkExpr(expr: Expr, visitor: IrVisitor): void {
   switch (expr.kind) {
     case 'literal': case 'parameter': case 'column': case 'context': case 'old_new': case 'entropy': return
     case 'unary': walkExpr(expr.operand, visitor); return
-    case 'binary': walkExpr(expr.left, visitor); walkExpr(expr.right, visitor); return
+    case 'binary': walkExpr(expr.left, visitor); walkExpr(expr.right, visitor); if (expr.escape !== undefined) walkExpr(expr.escape, visitor); return
     case 'conditional': for (const branch of expr.branches) { walkExpr(branch.when, visitor); walkExpr(branch.then, visitor) }; walkExpr(expr.otherwise, visitor); return
     case 'cast': walkExpr(expr.value, visitor); return
+    case 'builtin': for (const arg of expr.args) walkExpr(arg, visitor); return
     case 'function': for (const arg of expr.args) walkExpr(arg, visitor); return
-    case 'json': for (const arg of expr.args) walkExpr(arg, visitor); return
+    case 'aggregate':
+      if (expr.value !== undefined) walkExpr(expr.value, visitor)
+      if (expr.filter !== undefined) walkExpr(expr.filter, visitor)
+      for (const term of expr.orderBy ?? []) {
+        visitor.orderTerm?.(term)
+        walkExpr(term.expression, visitor)
+      }
+      return
+    case 'json':
+      for (const arg of expr.args) walkExpr(arg, visitor)
+      if (expr.pathExpression !== undefined) walkExpr(expr.pathExpression, visitor)
+      return
     case 'scalar_subquery': walkQuery(expr.query, visitor); return
     case 'exists': walkQuery(expr.query, visitor); return
     case 'membership': walkExpr(expr.value, visitor); for (const value of expr.values ?? []) walkExpr(value, visitor); if (expr.query !== undefined) walkQuery(expr.query, visitor); return
+    case 'row': for (const item of expr.items) walkExpr(item, visitor); return
+    case 'collate': walkExpr(expr.expression, visitor); return
+    case 'window':
+      for (const item of expr.args) walkExpr(item, visitor)
+      if (expr.filter !== undefined) walkExpr(expr.filter, visitor)
+      if (typeof expr.window !== 'string') walkWindowSpecification(expr.window, visitor)
+      return
     default: return assertNever(expr)
   }
 }
@@ -67,19 +90,41 @@ export function walkQuery(query: Query, visitor: IrVisitor): void {
   for (const expr of query.groupBy) walkExpr(expr, visitor)
   if (query.having !== undefined) walkExpr(query.having, visitor)
   for (const projection of query.projection) { visitor.projection?.(projection); walkExpr(projection.expression, visitor) }
-  for (const window of query.windows) { visitor.window?.(window); for (const expr of window.partitionBy) walkExpr(expr, visitor); for (const term of window.orderBy) { visitor.orderTerm?.(term); walkExpr(term.expression, visitor) } }
+  for (const window of query.windows) { visitor.window?.(window); walkWindowSpecification(window, visitor) }
   for (const compound of query.compounds) { visitor.compound?.(compound); walkQuery(compound.query, visitor) }
   for (const term of query.orderBy) { visitor.orderTerm?.(term); walkExpr(term.expression, visitor) }
+}
+
+function walkWindowSpecification(window: WindowSpecification, visitor: IrVisitor): void {
+  for (const expr of window.partitionBy) walkExpr(expr, visitor)
+  for (const term of window.orderBy) { visitor.orderTerm?.(term); walkExpr(term.expression, visitor) }
+  walkWindowFrame(window.frame, visitor)
+}
+
+function walkWindowFrame(frame: WindowFrame | undefined, visitor: IrVisitor): void {
+  if (frame?.start.type === 'preceding' || frame?.start.type === 'following') walkExpr(frame.start.offset, visitor)
+  if (frame?.end?.type === 'preceding' || frame?.end?.type === 'following') walkExpr(frame.end.offset, visitor)
 }
 
 export function walkMutation(mutation: Mutation, visitor: IrVisitor): void {
   visitor.mutation?.(mutation)
   if (mutation.returning !== undefined) walkQuery(mutation.returning, visitor)
+  if ('ctes' in mutation) {
+    for (const cte of mutation.ctes ?? []) { visitor.cte?.(cte); walkQuery(cte.query, visitor) }
+  }
   switch (mutation.kind) {
-    case 'insert': for (const row of mutation.rows) for (const expr of row) walkExpr(expr, visitor); return
-    case 'update': for (const assignment of mutation.assignments) walkExpr(assignment.value, visitor); if (mutation.where !== undefined) walkExpr(mutation.where, visitor); return
+    case 'insert':
+      for (const row of mutation.rows) for (const expr of row) walkExpr(expr, visitor)
+      if (mutation.source !== undefined) walkQuery(mutation.source, visitor)
+      for (const clause of mutation.upsertClauses ?? []) {
+        visitor.upsertClause?.(clause)
+        for (const assignment of clause.assignments) walkExpr(assignment.value, visitor)
+        if (clause.where !== undefined) walkExpr(clause.where, visitor)
+      }
+      return
+    case 'update': for (const assignment of mutation.assignments) walkExpr(assignment.value, visitor); if (mutation.where !== undefined) walkExpr(mutation.where, visitor); if (mutation.from !== undefined) walkQuery(mutation.from, visitor); return
     case 'delete': if (mutation.where !== undefined) walkExpr(mutation.where, visitor); return
-    case 'upsert': for (const expr of mutation.row) walkExpr(expr, visitor); for (const assignment of mutation.updates) walkExpr(assignment.value, visitor); return
+    case 'upsert': for (const expr of mutation.row) walkExpr(expr, visitor); if (mutation.source !== undefined) walkQuery(mutation.source, visitor); for (const assignment of mutation.updates) walkExpr(assignment.value, visitor); if (mutation.where !== undefined) walkExpr(mutation.where, visitor); return
     case 'merge': walkQuery(mutation.source, visitor); walkExpr(mutation.on, visitor); for (const clause of mutation.clauses) { visitor.mergeClause?.(clause); if (clause.predicate !== undefined) walkExpr(clause.predicate, visitor); for (const assignment of clause.assignments) walkExpr(assignment.value, visitor) }; return
     case 'stateful_call': for (const expr of mutation.args) walkExpr(expr, visitor); return
     default: return assertNever(mutation)
@@ -117,6 +162,7 @@ export function semanticComplexity(program: TransactionProgram): number {
     cte: () => { nodes += 1 }, join: () => { nodes += 1 }, projection: () => { nodes += 1 },
     orderTerm: () => { nodes += 1 }, window: () => { nodes += 1 }, compound: () => { nodes += 1 },
     mergeClause: () => { nodes += 1 },
+    upsertClause: () => { nodes += 1 },
   })
   return nodes
 }

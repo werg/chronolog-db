@@ -1,0 +1,17 @@
+{
+  "name": "@chronolog/runtime-workerd",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@chronolog/canonical": "workspace:*",
+    "@chronolog/materializer": "workspace:*"
+  },
+  "devDependencies": {
+    "@chronolog/compiler-sqlite": "workspace:*",
+    "@chronolog/ir": "workspace:*",
+    "@chronolog/materializer-doltlite": "workspace:*",
+    "@chronolog/protocol": "workspace:*"
+  }
+}

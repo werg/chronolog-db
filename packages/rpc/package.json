@@ -7,7 +7,6 @@
   "dependencies": {
     "@chronolog/canonical": "workspace:*",
     "@chronolog/ir": "workspace:*",
-    "@chronolog/node-core": "workspace:*",
     "@chronolog/protocol": "workspace:*"
   }
 }

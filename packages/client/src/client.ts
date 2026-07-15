@@ -36,7 +36,9 @@ import {
 } from './ir.js'
 import {
   decodeLocalSqlResult,
+  encodeCompiledLocalSqlQuery,
   encodeLocalSqlParameters,
+  type CompiledLocalSqlQuery,
   type DecodedLocalSqlResult,
   type LocalSqlInput,
 } from './local-sql.js'
@@ -420,16 +422,29 @@ export class ChronologClient {
     return { revision: response.revision, result: query.decodeResult(canonical), canonical, queryDigest: response.queryDigest }
   }
 
-  async queryLocalSql(
+  queryLocalSql(
     sql: string,
-    parameters: readonly LocalSqlInput[] = [],
-    options: LocalSqlQueryOptions = {},
+    parameters?: readonly LocalSqlInput[],
+    options?: LocalSqlQueryOptions,
+  ): Promise<LocalSqlQueryResponse>
+  queryLocalSql(
+    query: CompiledLocalSqlQuery,
+    options?: LocalSqlQueryOptions,
+  ): Promise<LocalSqlQueryResponse>
+  async queryLocalSql(
+    input: string | CompiledLocalSqlQuery,
+    parametersOrOptions: readonly LocalSqlInput[] | LocalSqlQueryOptions = [],
+    inputOptions: LocalSqlQueryOptions = {},
   ): Promise<LocalSqlQueryResponse> {
+    const compiled = typeof input === 'string'
+      ? { sql: input, parameters: encodeLocalSqlParameters(parametersOrOptions as readonly LocalSqlInput[]) }
+      : encodeCompiledLocalSqlQuery(input)
+    const options = typeof input === 'string' ? inputOptions : parametersOrOptions as LocalSqlQueryOptions
     const response = await this._unary('query.localSql', {
       groupId: this.groupId,
       requestId: this._requestId(),
-      sql,
-      parameters: encodeLocalSqlParameters(parameters),
+      sql: compiled.sql,
+      parameters: compiled.parameters,
       ...(options.maxRows === undefined ? {} : { maxRows: options.maxRows }),
       ...(options.atRevision === undefined ? {} : { atRevision: options.atRevision }),
     }, options.signal === undefined ? {} : { signal: options.signal })

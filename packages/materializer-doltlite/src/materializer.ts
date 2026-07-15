@@ -241,7 +241,6 @@ export class DeterministicMaterializer implements MaterializerIrBackend {
       this.#compiledSchema.executionManifest.resources.maxQueryRows,
       this.#compiledSchema.executionManifest.resources.maxResultBytes,
       {},
-      'local_read',
     )
     const resultDigest = await digestCanonicalQueryResult(result)
     return {

@@ -37,6 +37,9 @@ importers:
       '@chronolog/rpc':
         specifier: workspace:*
         version: link:packages/rpc
+      '@chronolog/runtime-workerd':
+        specifier: workspace:*
+        version: link:packages/runtime-workerd
       '@chronolog/transport-ssb':
         specifier: workspace:*
         version: link:packages/transport-ssb
@@ -195,6 +198,18 @@ importers:
 
   packages/kernels: {}
 
+  packages/materializer:
+    dependencies:
+      '@chronolog/canonical':
+        specifier: workspace:*
+        version: link:../canonical
+      '@chronolog/ir':
+        specifier: workspace:*
+        version: link:../ir
+      '@chronolog/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+
   packages/materializer-doltlite:
     dependencies:
       '@chronolog/compiler-sqlite':
@@ -206,6 +221,9 @@ importers:
       '@chronolog/kernels':
         specifier: workspace:*
         version: link:../kernels
+      '@chronolog/materializer':
+        specifier: workspace:*
+        version: link:../materializer
       '@chronolog/protocol':
         specifier: workspace:*
         version: link:../protocol
@@ -218,9 +236,6 @@ importers:
       '@chronolog/capabilities':
         specifier: workspace:*
         version: link:../capabilities
-      '@chronolog/compiler-sqlite':
-        specifier: workspace:*
-        version: link:../compiler-sqlite
       '@chronolog/control-store':
         specifier: workspace:*
         version: link:../control-store
@@ -230,15 +245,22 @@ importers:
       '@chronolog/ir':
         specifier: workspace:*
         version: link:../ir
-      '@chronolog/materializer-doltlite':
+      '@chronolog/materializer':
         specifier: workspace:*
-        version: link:../materializer-doltlite
+        version: link:../materializer
       '@chronolog/protocol':
         specifier: workspace:*
         version: link:../protocol
       '@chronolog/transport-ssb':
         specifier: workspace:*
         version: link:../transport-ssb
+    devDependencies:
+      '@chronolog/compiler-sqlite':
+        specifier: workspace:*
+        version: link:../compiler-sqlite
+      '@chronolog/materializer-doltlite':
+        specifier: workspace:*
+        version: link:../materializer-doltlite
 
   packages/protocol:
     dependencies:
@@ -276,12 +298,50 @@ importers:
       '@chronolog/ir':
         specifier: workspace:*
         version: link:../ir
-      '@chronolog/node-core':
-        specifier: workspace:*
-        version: link:../node-core
       '@chronolog/protocol':
         specifier: workspace:*
         version: link:../protocol
+
+  packages/runtime-workerd:
+    dependencies:
+      '@chronolog/canonical':
+        specifier: workspace:*
+        version: link:../canonical
+      '@chronolog/materializer':
+        specifier: workspace:*
+        version: link:../materializer
+    devDependencies:
+      '@chronolog/compiler-sqlite':
+        specifier: workspace:*
+        version: link:../compiler-sqlite
+      '@chronolog/ir':
+        specifier: workspace:*
+        version: link:../ir
+      '@chronolog/materializer-doltlite':
+        specifier: workspace:*
+        version: link:../materializer-doltlite
+      '@chronolog/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+
+  packages/sql-frontend:
+    dependencies:
+      '@chronolog/client':
+        specifier: workspace:*
+        version: link:../client
+      '@chronolog/compiler-sqlite':
+        specifier: workspace:*
+        version: link:../compiler-sqlite
+      '@chronolog/ir':
+        specifier: workspace:*
+        version: link:../ir
+      sqlite3-parser:
+        specifier: 0.7.1
+        version: 0.7.1
+    devDependencies:
+      '@dolthub/doltlite':
+        specifier: 0.11.29
+        version: 0.11.29(patch_hash=b8b12ba33968f3e1d16602d663535fa7db735a63d12677d1d7352e8a755a94e9)
 
   packages/testkit:
     dependencies:
@@ -2795,6 +2855,10 @@ packages:
 
   split-ca@1.0.1:
     resolution: {integrity: sha512-Q5thBSxp5t8WPTTJQS59LrGqOZqOsrhDGDVm8azCqIBjSBd7nd9o2PM+mDulQQkh8h//4U6hFZnc/mul8t5pWQ==}
+
+  sqlite3-parser@0.7.1:
+    resolution: {integrity: sha512-+KcAIcmD9xk4Sz3hNsEI7QEGAMGl3s5PyigIf6ri/u1DzAuAmi5YZInjtnXKqHvx9ySl5e0RYILfCVhTdAeKJg==}
+    hasBin: true
 
   ssb-about-self@1.1.0:
     resolution: {integrity: sha512-AG07Dg2XG9CJvK52qrpwz54cXu+G6sPKwPiOb2LX5K+ORGhA+4MJUVViwuMEcOCI1a1wmXvOKFJbeTaFtosSAw==}
@@ -6171,6 +6235,8 @@ snapshots:
   split-buffer@1.0.0: {}
 
   split-ca@1.0.1: {}
+
+  sqlite3-parser@0.7.1: {}
 
   ssb-about-self@1.1.0(ssb-db2@8.1.0):
     dependencies:

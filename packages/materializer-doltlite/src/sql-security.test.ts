@@ -21,6 +21,8 @@ function database(): DatabaseLike {
   db.exec(`
     CREATE TABLE accounts (id INTEGER PRIMARY KEY AUTOINCREMENT, value TEXT NOT NULL);
     INSERT INTO accounts VALUES (1, 'one'), (2, 'two');
+    CREATE TABLE "DoltOn" (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
+    INSERT INTO "DoltOn" VALUES (1, 'ordinary application table');
     CREATE TABLE chronolog_transactions (tx_id BLOB PRIMARY KEY, outcome TEXT NOT NULL);
     CREATE TABLE chronolog_materializer_metadata (key TEXT PRIMARY KEY, value TEXT);
     CREATE TABLE chronolog_checkpoints (prefix_length INTEGER PRIMARY KEY);
@@ -39,9 +41,13 @@ describe('SQL authorization profile', () => {
   it('allows deterministic application DML and explicitly approved functions', () => {
     const db = database()
     try {
-      withProfiledStatement(db, "UPDATE accounts SET value = lower(value) WHERE abs(id) = 1", 'consensus_mutation', (statement) => statement.run())
+      withProfiledStatement(db, "UPDATE accounts SET value = lower(value) WHERE sign(id) = 1", 'consensus_mutation', (statement) => statement.run())
+      withProfiledStatement(db, 'UPDATE "DoltOn" SET value = upper(value) WHERE id = 1', 'consensus_mutation', (statement) => statement.run())
       const result = executeLocalSql(db, 'SELECT count(*), max(value) FROM accounts')
       expect(result.rows).toHaveLength(1)
+      expect(executeLocalSql(db, 'SELECT value FROM "DoltOn"').rows).toEqual([
+        [{ kind: 'text', value: 'ORDINARY APPLICATION TABLE' }],
+      ])
     } finally {
       db.close()
     }
@@ -82,7 +88,7 @@ describe('SQL authorization profile', () => {
     }
   })
 
-  it('denies DDL, transaction control, attachment, pragmas, maintenance, virtual tables and recursion', () => {
+  it('denies DDL, transaction control, attachment, pragmas, maintenance and virtual-table creation', () => {
     const db = database()
     try {
       for (const sql of [
@@ -97,14 +103,13 @@ describe('SQL authorization profile', () => {
         'REINDEX',
         'ANALYZE',
         'CREATE VIRTUAL TABLE attack USING fts5(value)',
-        'WITH RECURSIVE x(v) AS (VALUES(1) UNION ALL SELECT v+1 FROM x WHERE v<2) SELECT * FROM x',
-      ]) expectProfileViolation(db, sql, sql.startsWith('WITH') ? 'local_read' : 'consensus_mutation')
+      ]) expectProfileViolation(db, sql)
     } finally {
       db.close()
     }
   })
 
-  it('uses a positive function allowlist, including for new or overlooked Dolt functions', () => {
+  it('uses a positive function allowlist for consensus SQL', () => {
     const db = database()
     try {
       for (const expression of [
@@ -120,6 +125,88 @@ describe('SQL authorization profile', () => {
         "dolt_hashof_db('HEAD')",
         'dolt_version()',
         "load_extension('/tmp/attack')",
+        "format('%s', 'x')",
+        'round(1)',
+        'sum(1)',
+      ]) expectProfileViolation(db, `SELECT ${expression}`, 'consensus_precondition')
+      expect(withProfiledStatement(
+        db,
+        "SELECT count(*), min(id), max(id), abs(id), sign(max(id)), value GLOB 't*' FROM accounts GROUP BY value",
+        'consensus_precondition',
+        (statement) => statement.all(),
+      )).toHaveLength(2)
+      expect(withProfiledStatement(db, `
+        SELECT
+          char(65), concat('a', 1), concat_ws('-', 'a', 'b'),
+          if(1, 'yes', 'no'), iif(0, 'yes', 'no'), likely(1), unlikely(0),
+          glob('a*', 'abc'), like('a%', 'abc'), min(2, 1), max(2, 1),
+          quote(x'ab'), typeof(NULL), unhex('ab-cd', '-'), unicode('é'),
+          unistr('A\\u00e9'), unistr_quote(char(1)), zeroblob(3)
+      `, 'consensus_precondition', (statement) => statement.all())).toHaveLength(1)
+    } finally {
+      db.close()
+    }
+  })
+
+  it('allows bounded recursive CTEs in the consensus profile', () => {
+    const db = database()
+    try {
+      const rows = withProfiledStatement(db, `
+        WITH RECURSIVE numbers(value) AS (
+          VALUES(1) UNION ALL SELECT value + 1 FROM numbers WHERE value < 3
+        )
+        SELECT value FROM numbers ORDER BY value
+      `, 'consensus_precondition', (statement) => statement.all())
+      expect(rows).toHaveLength(3)
+    } finally {
+      db.close()
+    }
+  })
+
+  it('allows only the JSON1 functions emitted by the deterministic compiler profile', () => {
+    const db = database()
+    try {
+      const rows = withProfiledStatement(db, `
+        SELECT
+          json('{"key":1}') -> '$.key',
+          json_type(json('{"key":1}'), '$.key'),
+          json_array(1, 2),
+          json_object('key', 1)
+      `, 'consensus_precondition', (statement) => statement.all())
+      expect(rows).toHaveLength(1)
+      expectProfileViolation(db, `SELECT json_extract('{"key":1}', '$.key')`, 'consensus_precondition')
+      expectProfileViolation(db, `SELECT json_valid('{"key":1}')`, 'consensus_precondition')
+    } finally {
+      db.close()
+    }
+  })
+
+  it('allows broad standard SQLite reads locally without weakening the consensus profile', () => {
+    const db = database()
+    try {
+      const result = executeLocalSql(db, `
+        WITH RECURSIVE numbers(value) AS (
+          VALUES(1) UNION ALL SELECT value + 1 FROM numbers WHERE value < 3
+        )
+        SELECT
+          datetime('now'),
+          json_extract('{"value":"ordinary-sql"}', '$.value'),
+          sqlite_version(),
+          random(),
+          sum(value) OVER ()
+        FROM numbers
+        ORDER BY value
+      `)
+      expect(result.rows).toHaveLength(3)
+      expect(result.rows[0]?.[1]).toEqual({ kind: 'text', value: 'ordinary-sql' })
+      expect(result.rows[0]?.[4]).toEqual({ kind: 'integer', value: '6' })
+
+      for (const expression of [
+        "load_extension('/tmp/attack')",
+        'active_branch()',
+        "dolt_hashof_db('HEAD')",
+        'dolt_version()',
+        'doltlite_engine()',
       ]) expectProfileViolation(db, `SELECT ${expression}`, 'local_read')
     } finally {
       db.close()

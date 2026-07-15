@@ -87,6 +87,19 @@ observation, and mutation IR. Observations become exact-result preconditions by
 default. `local-sql` is intentionally separate and every result is marked
 `consensusSafe: false`; raw SQL cannot enter a replicated transaction.
 
+Application read code does not need a Chronolog-specific SQL DSL. The generated
+schema module includes plain row interfaces plus a `ChronologSqlReadDatabase`
+table-to-row map suitable as the database type for external TypeScript SQL
+builders configured with a SQLite dialect. `client.queryLocalSql()` accepts
+their usual structural compiled-query shape (`{ sql, parameters }`) directly.
+This is the broad, read-only SQLite surface. For consensus reads and commands,
+`@chronolog/sql-frontend` accepts that same structural output, parses its
+tested SQLite subset locally, and validates the resulting IR with the selected
+schema, execution manifest, and real compiler. Canonical IR is internal signed
+wire bytecode, not a required application DSL. SQL text still never enters a
+replicated transaction, and draft publication still requires an explicit
+precondition. See [the frontend support matrix](packages/sql-frontend/README.md).
+
 The CLI also supports `outcome`, `evidence`, `watermark`, and `replication`.
 Set `CHRONOLOG_URL`, `CHRONOLOG_GROUP_ID`, and `CHRONOLOG_TOKEN` when connecting
 to a non-default daemon. The daemon refuses to bind RPC to a non-loopback host
@@ -188,12 +201,15 @@ static snapshots and epoch configuration to all participants and restart them.
 | `canonical` | Strict bounded CBOR, UTF-8, bytes, typed hash domains |
 | `ir` | Relational AST, schema/execution manifests, codecs, validation, builders |
 | `compiler-sqlite` | Catalog-aware IR lowering and deterministic engine manifests |
+| `sql-frontend` | Standard compiled SQLite SQL to compiler-validated canonical IR adapter |
 | `protocol` | Signed transaction/attestation messages and immutable order keys |
 | `capabilities` | Genesis, grants, revocations, policies, recovery |
 | `crypto` | HPKE, signed epochs, content encryption, key-store interfaces |
 | `transport-ssb` | Durable SSB-DB2 feeds, EBT networking, deterministic simulator |
 | `control-store` | Rebuildable candidates, attestations, order, heartbeats, evidence |
-| `materializer-doltlite` | IR execution, exact log, Dolt checkpoints, suffix replay |
+| `materializer` | Portable exact-ref contracts, coordinator/query/publication interfaces, and differential fixtures |
+| `materializer-doltlite` | IR execution, exact log, Dolt checkpoints, suffix replay, and legacy runtime adapter |
+| `runtime-workerd` | Named immutable-input controller, deterministic run/follow coordinator, differential adapter, and test-only real DoltLite replay fixture |
 | `node-core` | Ingestion, validation, admission, encryption, orchestration |
 | `rpc` | Local service contract, in-process and HTTP transports |
 | `client` / `react` | Reactive client, transaction drafts, framework bindings |
@@ -209,6 +225,24 @@ and never silently falls back to an engine without Dolt commits. Startup fails
 closed on schema/execution digest mismatch or when the patched binding lacks a
 required reducer control. Checkpoints identify real Dolt commits and are
 recovered from Dolt branch refs, then verified against the protected log.
+
+The transport-neutral workerd adapter is implemented without Node, N-API, or
+SSB runtime imports. It validates named `previous`/`replayBase` refs and the
+engine/schema/execution tuple before invoking an injected database kernel,
+accepts only exact CAS reads, and keeps publication as a separate request
+value. A test-only composition now drives append and late-predecessor replay
+through that controller using two real pinned N-API DoltLite materializers and
+compares protected logs, revisions, outcomes, query results, and projected
+immutable identities. This is not Dolt merge or actual workerd execution: the
+host/kernel remain injected, and the fail-closed pure workerd JSG/DoltLite
+kernel, CAS exporter, and daemon cutover are not implemented yet.
+
+`node-core` now consumes portable materialization coordinator, immutable query,
+and publication-store interfaces instead of the concrete DoltLite class. The
+shipped daemon composes those interfaces with the legacy DoltLite adapter, so
+its authority and branch-publication behavior are unchanged. RPC handlers
+similarly consume a narrow service contract rather than constructing or typing
+against `ChronologNode` directly.
 
 DoltLite is patched at build time to statically register pinned sqlite-vec
 0.1.9 while dynamic extension loading remains disabled. Native sqlite-vec,

@@ -22,10 +22,48 @@ Implemented and covered by executable tests:
   contiguous/gap status, and restart;
 - canonical relational transaction programs with mandatory `assert`/`expect`
   preconditions and no consensus SQL strings;
+- a compiler-validated SQLite SQL frontend generated from SQLite 3.53
+  `parse.y`, explicitly pinned rather than imported through a moving parser
+  alias, for the tested SELECT and INSERT/UPDATE/DELETE surface, with canonical
+  IR kept as internal signed wire bytecode;
+- checked Int64 and timestamp/duration scalar arithmetic, exact bitwise
+  operations, compiler-owned deterministic SQLite scalar functions, standard
+  Boolean aggregates, and deterministic ordering completion without schema
+  registration for core SQL functions;
+- deterministic mutation lowering for `DEFAULT VALUES`, insert-select and
+  query-source named upsert, singleton `UPDATE OR IGNORE/REPLACE`, and
+  compiler-proven scalar or key-preserving `UPDATE ... FROM`;
+- exact-SQL lowering for recursive and forward-referencing CTEs, nested
+  compounds, windows and frames, outer/NATURAL/USING joins, row values,
+  `DEFAULT VALUES`, `REPLACE INTO`, chained SQLite UPSERT, `UPDATE FROM`,
+  row-value `SET`, mutation CTEs, and the `main.` application-schema qualifier;
 - schema and execution manifests committed by digest to every transaction;
 - native DoltLite-only materialization, protected accepted/rejected transaction
   log, one top-level transaction per candidate, real Dolt checkpoints, suffix
   replay, and outcome-change attribution;
+- a backend-neutral materializer contract with exact immutable object/database
+  dependencies, canonical invocation/suffix/continuation/outcome codecs,
+  explicit pure context, a DoltLite oracle adapter, and a differential fixture
+  harness ready for a workerd backend;
+- an isolated transport-neutral workerd materializer controller with named
+  `previous`/`replayBase` inputs, exact-only CAS access, private output and
+  checkpoint/finalize hooks, typed artifacts, deterministic standard-mode
+  run/follow coordination, exact result-selector verification, separate
+  publication intent, and a differential-harness adapter;
+- a test-only pinned native DoltLite differential composition that routes a
+  real append and late-predecessor replay through that controller and matches
+  an independent real materializer on revisions, protected logs, outcomes,
+  query results, and projected immutable output/artifact identities;
+- a modules-syntax Chronolog reducer-bundle factory over the implemented named
+  input/output handle contract, canonical application-result selectors, and a
+  typed host client whose run/follow/publication transports remain injectable;
+  an in-memory shadow host executes the actual module boundary, reconciles an
+  ambiguous run by deterministic key, and publishes only through the separate
+  client-side intent;
+- portable coordinator, immutable-query, and publication-store interfaces;
+  `node-core` dependency inversion through a behavior-preserving DoltLite
+  adapter; and RPC handlers typed against a narrow service contract instead of
+  the concrete node class;
 - explicit read-only transaction-log IR for dependencies on preceding
   transactions;
 - reserved transaction timestamp/nonce context, structural named parameters,
@@ -43,6 +81,18 @@ Implemented and covered by executable tests:
 The default execution manifest enables the compiler's portable core plus exact
 decimal and canonical JSON values. Ordinary vector values are available when a
 manifest sets a positive vector-dimension bound.
+
+The workerd package currently executes an injected database kernel and host
+transport. Its pinned native differential fixture strengthens the evidence
+from fake-only kernel tests to real Chronolog replay/materialization, and the
+shadow bundle test now executes the real typed Worker/client boundary. It
+still does not execute a workerd binary, provide the complete Chronolog SQL
+kernel through the current minimal JSG statement surface, import or export a
+database through workerd CAS, exercise Dolt merge, finalize typed artifacts,
+or prove that a fail-closed pure workerd JSG context can execute the Chronolog
+kernel. `chronologd` does not publish through workerd metadata.
+The daemon still composes the legacy DoltLite adapter; no production authority
+or publication cutover has occurred.
 
 ## Daemon operational profiles
 
@@ -71,8 +121,14 @@ execution because their complete conformance gates have not been satisfied:
 - managed FTS, sqlite-vec, and spatial derived indexes;
 - deterministic WASM modules and registered extension calls;
 - floating-point portable vector distance;
-- rules/triggers, generated columns, merge, views, CTEs, compounds, windows,
-  aggregates, and custom collations/functions beyond the implemented core;
+- rules/triggers, generated columns, merge, views, checked sums and
+  order-sensitive aggregates, registered runtime collations/functions beyond
+  the implemented core, table-valued functions, and parenthesized join trees;
+- canonical representative selection for collation-equal but byte-distinct
+  `DISTINCT`, set-compound, grouping, and `MIN`/`MAX` results;
+- semantic recursive-row/depth limits beyond the current canonical frontier
+  order and VM/result backstops;
+- mutation `RETURNING` result delivery and digest framing;
 - schema-change transactions and multi-member operational onboarding commands.
 
 Native FTS5, JSON1, RTree, and sqlite-vec availability is diagnostic only.
@@ -92,5 +148,10 @@ profile.
 
 The detailed acceptance criteria remain in the
 [conformance and delivery specification](implementation-specs/09-conformance-delivery.md).
+The SQL-first cutover and transaction result/ordered-mutation protocol work are
+specified in
+[deterministic SQL transactions](implementation-specs/10-deterministic-sql-transactions.md)
+and
+[transaction results and ordered mutations](implementation-specs/11-transaction-results-and-ordered-mutations.md).
 Features move from gated to enabled only by changing code, tests, and the
 measured manifest together.

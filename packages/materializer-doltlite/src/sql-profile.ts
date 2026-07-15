@@ -1,3 +1,5 @@
+import { DETERMINISTIC_SQLITE_COMPILER_FUNCTIONS } from '@chronolog/compiler-sqlite'
+import { isReservedSchemaObjectName } from '@chronolog/ir'
 import { utf8 } from '@chronolog/protocol'
 
 import type {
@@ -93,52 +95,23 @@ export const DEFAULT_SQL_RUNTIME_LIMITS: Readonly<SqlRuntimeLimits> = {
 }
 
 /**
- * Every permitted function is deterministic from its SQL arguments under the
- * pinned SQLite build. Unknown functions fail closed. Time, random, connection
- * state, extension, filesystem and all Dolt functions are intentionally absent.
+ * Every permitted consensus function is deterministic from its SQL arguments
+ * under the pinned SQLite build. Unknown functions fail closed. Time, random,
+ * connection state, extension, filesystem and all Dolt functions are absent.
+ * Local read SQL deliberately uses the separate denylist below.
  */
-export const ALLOWED_DETERMINISTIC_FUNCTIONS: ReadonlySet<string> = new Set([
-  'abs',
-  'avg',
-  'char',
-  'coalesce',
-  'concat',
-  'concat_ws',
-  'count',
-  'format',
-  'glob',
-  'hex',
-  'if',
-  'ifnull',
-  'iif',
-  'instr',
-  'length',
-  'like',
-  'likelihood',
-  'likely',
-  'lower',
-  'ltrim',
-  'max',
-  'min',
-  'nullif',
-  'octet_length',
-  'printf',
-  'quote',
-  'replace',
-  'round',
-  'rtrim',
-  'sign',
-  'substr',
-  'substring',
-  'sum',
-  'total',
-  'trim',
-  'typeof',
-  'unhex',
-  'unicode',
-  'unlikely',
-  'upper',
-  'zeroblob',
+export const ALLOWED_DETERMINISTIC_FUNCTIONS = DETERMINISTIC_SQLITE_COMPILER_FUNCTIONS
+
+/**
+ * Local SQL is not replayed or signed, so ambient presentation functions such
+ * as datetime('now'), random(), JSON1, math and window functions are safe. It
+ * still runs on an immutable reader and must not cross an external-effect or
+ * Dolt-control boundary. Unknown statically linked read functions are allowed;
+ * dynamic extension loading is also disabled at the native connection level.
+ */
+export const FORBIDDEN_LOCAL_READ_FUNCTIONS: ReadonlySet<string> = new Set([
+  'active_branch',
+  'load_extension',
 ])
 
 export type SqlAuthorizationMode =
@@ -339,10 +312,13 @@ function createAuthorizer(mode: SqlAuthorizationMode) {
     const database = asciiLower(databaseName)
     const source = asciiLower(triggerOrView)
 
-    if (source !== '' && isForbiddenObject(source)) return SQLITE_DENY
+    if (source !== '' && isReservedSchemaObjectName(source)) return SQLITE_DENY
     if (action === ACTION.SELECT) return SQLITE_OK
     if (action === ACTION.FUNCTION) {
       const functionName = secondaryName || objectName
+      if (mode === 'local_read') {
+        return isForbiddenLocalReadFunction(functionName) ? SQLITE_DENY : SQLITE_OK
+      }
       return ALLOWED_DETERMINISTIC_FUNCTIONS.has(functionName) ? SQLITE_OK : SQLITE_DENY
     }
     if (action === ACTION.READ) {
@@ -352,33 +328,33 @@ function createAuthorizer(mode: SqlAuthorizationMode) {
       if (database !== '' && database !== 'main') return SQLITE_DENY
       if (mode === 'internal_schema') return database === '' || database === 'main' ? SQLITE_OK : SQLITE_DENY
       if ((mode === 'local_read' || mode === 'consensus_precondition') && objectName === 'chronolog_transactions') return SQLITE_OK
-      return isForbiddenObject(objectName) ? SQLITE_DENY : SQLITE_OK
+      return isReservedSchemaObjectName(objectName) ? SQLITE_DENY : SQLITE_OK
     }
     if ((mode === 'consensus_mutation' || mode === 'internal_schema') && (
       action === ACTION.INSERT || action === ACTION.UPDATE || action === ACTION.DELETE
     )) {
-      if (database !== 'main' || (mode !== 'internal_schema' && isForbiddenObject(objectName))) return SQLITE_DENY
+      if (database !== 'main' || (mode !== 'internal_schema' && isReservedSchemaObjectName(objectName))) return SQLITE_DENY
       return SQLITE_OK
     }
     if (mode === 'internal_schema' && (
       action === ACTION.CREATE_TABLE || action === ACTION.CREATE_INDEX ||
       action === ACTION.CREATE_VIEW
     )) return database === 'main' ? SQLITE_OK : SQLITE_DENY
-    // All DDL, transactions, pragmas, attachment, virtual tables, recursion,
-    // maintenance commands and unknown future action codes fail closed.
+    // A recursive CTE is a deterministic query construct and remains bounded
+    // by the same VM-step and result limits as every other statement. Schema
+    // validation, rather than this coarse callback, excludes triggers from the
+    // consensus language.
+    if (action === ACTION.RECURSIVE && mode !== 'internal_schema') return SQLITE_OK
+    // All DDL, transactions, pragmas, attachment, virtual tables, maintenance
+    // commands and unknown future action codes fail closed.
     return SQLITE_DENY
   }
 }
 
-function isForbiddenObject(value: string): boolean {
-  return value.startsWith('chronolog_') ||
-    value.startsWith('dolt') ||
-    value.startsWith('sqlite_') ||
-    value.startsWith('pragma_') ||
-    value === 'dbstat' ||
-    value === 'sqlite_dbpage' ||
-    value === 'bytecode' ||
-    value === 'tables_used'
+function isForbiddenLocalReadFunction(value: string): boolean {
+  return FORBIDDEN_LOCAL_READ_FUNCTIONS.has(value) ||
+    value.startsWith('dolt_') ||
+    value.startsWith('doltlite_')
 }
 
 function asciiLower(value: string | null): string {

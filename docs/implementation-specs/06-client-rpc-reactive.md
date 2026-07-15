@@ -100,8 +100,9 @@ Query<Row, 'ordered' | 'multiset' | 'set'>
 ScalarQuery<Value>
 ```
 
-Calling `.limit()` is a compile-time warning/error unless `.orderBy()` has been
-provided. Node validation remains responsible for proving total order.
+Calling `.limit()` does not require a user-supplied proof term. The node
+preserves any authored `ORDER BY` and derives a canonical projected-row order
+when the query otherwise leaves row choice unspecified.
 
 ### 4.3 Values
 
@@ -374,6 +375,41 @@ transport error, and schema mismatch.
 - is not cached as an observation; and
 - carries the revision at which it ran.
 
+It accepts either `(sql, parameters)` or the structural compiled-query shape
+used by SQL builders and ORMs configured with a SQLite dialect:
+
+```ts
+const compiled = externalQueryBuilder
+  .selectFrom('accounts')
+  .select(['id', 'balance'])
+  .where('id', '=', accountId)
+  .compile()
+
+const result = await client.queryLocalSql(compiled)
+```
+
+Chronolog has no runtime dependency on that builder. Generated schema modules
+export ordinary row interfaces and `ChronologSqlReadDatabase`, a table-to-row
+map that can parameterize an external TypeScript SQLite query builder for this
+read-only surface. Generated bindings are therefore not a mandate to adopt a bespoke
+application query DSL.
+
+Compiled SQL remains local and non-consensus. An external builder that targets
+consensus uses `@chronolog/sql-frontend` (or another `ConsensusSqlFrontend`
+implementation) to lower its structural `{ sql, parameters }` output locally.
+The shipped SQLite frontend validates every result against the canonical
+schema, selected execution manifest, and real compiler before returning it.
+Canonical IR is internal signed wire bytecode rather than the recommended
+application authoring DSL. Merely copying a SQL string into the protocol would
+still discard signed logical types, explicit transaction context, resource
+limits, and canonical result semantics, so no raw `transactSql` route exists.
+
+The frontend is deliberately fail-closed and its exact supported syntax is
+documented in `packages/sql-frontend/README.md`. The client workflow remains
+`draft.observe(loweredQuery)`, `draft.expect(observation)`, then
+`draft.mutate(loweredCommand)`; SQL lowering never weakens the mandatory
+precondition invariant.
+
 The CLI may expose `chronolog query-sql` but MUST NOT expose a corresponding
 `transact-sql` command.
 
@@ -433,4 +469,3 @@ Required client/RPC tests:
 - Raw SQL is visibly local/read-only and cannot be promoted implicitly.
 - Reactive queries and outcomes retain revision and late-replay semantics.
 - Old draft methods are deleted rather than deprecated or retained.
-

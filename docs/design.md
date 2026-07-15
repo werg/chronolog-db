@@ -1,6 +1,9 @@
 # Chronolog DB Protocol Design
 
-Status: Draft 0.1
+Status: Historical protocol background. Its relational-IR transaction sections
+are superseded by
+[Specification 10](implementation-specs/10-deterministic-sql-transactions.md)
+and [Specification 11](implementation-specs/11-transaction-results-and-ordered-mutations.md).
 
 Date: 2026-07-13
 

@@ -9,9 +9,7 @@ export function initializeSystemLog(database: DatabaseLike): void {
     CREATE TABLE ${EXECUTION_MANIFEST_TABLE} (
       singleton_key INTEGER PRIMARY KEY NOT NULL CHECK (singleton_key = 1),
       manifest_digest BLOB NOT NULL CHECK (length(manifest_digest) = 32),
-      canonical_manifest BLOB NOT NULL,
-      schema_digest BLOB NOT NULL CHECK (length(schema_digest) = 32),
-      canonical_schema BLOB NOT NULL
+      canonical_manifest BLOB NOT NULL
     ) STRICT;
     CREATE TABLE ${TRANSACTION_LOG_TABLE} (
       tx_id BLOB PRIMARY KEY NOT NULL,
@@ -26,9 +24,16 @@ export function initializeSystemLog(database: DatabaseLike): void {
       ),
       rejection_code TEXT,
       failing_precondition_id INTEGER,
-      failing_command_id INTEGER,
-      failing_rule_id INTEGER,
+      failing_precondition_index INTEGER,
+      failing_statement_index INTEGER,
+      failure_phase TEXT CHECK (
+        failure_phase IS NULL OR failure_phase IN ('precondition', 'statement', 'finalize')
+      ),
       failing_constraint_id INTEGER,
+      result_envelope_version INTEGER CHECK (
+        result_envelope_version IS NULL OR result_envelope_version = 1
+      ),
+      result_envelope BLOB,
       result_digest BLOB CHECK (result_digest IS NULL OR length(result_digest) = 32)
     ) STRICT
   `)
@@ -40,19 +45,17 @@ export function insertExecutionManifest(
 ): void {
   database.prepare(`
     INSERT INTO ${EXECUTION_MANIFEST_TABLE} (
-      singleton_key, manifest_digest, canonical_manifest, schema_digest, canonical_schema
-    ) VALUES (1, ?, ?, ?, ?)
+      singleton_key, manifest_digest, canonical_manifest
+    ) VALUES (1, ?, ?)
   `).run(
     manifest.manifestDigest,
     manifest.canonicalManifest,
-    manifest.schemaDigest,
-    manifest.canonicalSchema,
   )
 }
 
 export function readExecutionManifest(database: DatabaseLike): StoredExecutionManifest {
   const raw = database.prepare(`
-    SELECT manifest_digest, canonical_manifest, schema_digest, canonical_schema
+    SELECT manifest_digest, canonical_manifest
       FROM ${EXECUTION_MANIFEST_TABLE}
      WHERE singleton_key = 1
   `).get()
@@ -60,8 +63,6 @@ export function readExecutionManifest(database: DatabaseLike): StoredExecutionMa
   return {
     manifestDigest: asDigest(raw.manifest_digest),
     canonicalManifest: asBytes(raw.canonical_manifest),
-    schemaDigest: asDigest(raw.schema_digest),
-    canonicalSchema: asBytes(raw.canonical_schema),
   }
 }
 
@@ -69,8 +70,9 @@ export function readSystemLog(database: DatabaseLike): TransactionLogRow[] {
   const statement = database.prepare(`
     SELECT tx_id, order_index, author_id, author_timestamp_ms,
            author_feed_sequence, candidate_digest, canonical_candidate,
-           outcome, rejection_code, failing_precondition_id, failing_command_id,
-           failing_rule_id, failing_constraint_id, result_digest
+           outcome, rejection_code, failing_precondition_id,
+           failing_precondition_index, failing_statement_index, failure_phase,
+           failing_constraint_id, result_envelope_version, result_envelope, result_digest
       FROM ${TRANSACTION_LOG_TABLE}
      ORDER BY order_index
   `)
@@ -101,9 +103,12 @@ export function readSystemLog(database: DatabaseLike): TransactionLogRow[] {
       outcome,
       rejectionCode: raw.rejection_code === null ? null : asString(raw.rejection_code),
       failingPreconditionId: asNullableId(raw.failing_precondition_id),
-      failingCommandId: asNullableId(raw.failing_command_id),
-      failingRuleId: asNullableId(raw.failing_rule_id),
+      failingPreconditionIndex: asNullableId(raw.failing_precondition_index),
+      failingStatementIndex: asNullableId(raw.failing_statement_index),
+      failurePhase: asNullablePhase(raw.failure_phase),
       failingConstraintId: asNullableId(raw.failing_constraint_id),
+      resultEnvelopeVersion: raw.result_envelope_version === null ? null : 1,
+      resultEnvelope: raw.result_envelope === null ? null : asBytes(raw.result_envelope),
       resultDigest: raw.result_digest === null ? null : asDigest(raw.result_digest),
     }
   })
@@ -122,9 +127,12 @@ export function insertSystemLogRow(
     readonly outcome: string
     readonly rejectionCode: string | null
     readonly failingPreconditionId: number | null
-    readonly failingCommandId: number | null
-    readonly failingRuleId: number | null
+    readonly failingPreconditionIndex: number | null
+    readonly failingStatementIndex: number | null
+    readonly failurePhase: 'precondition' | 'statement' | 'finalize' | null
     readonly failingConstraintId: number | null
+    readonly resultEnvelopeVersion: 1 | null
+    readonly resultEnvelope: Uint8Array | null
     readonly resultDigest: Uint8Array | null
   },
 ): void {
@@ -133,9 +141,10 @@ export function insertSystemLogRow(
       INSERT INTO ${TRANSACTION_LOG_TABLE} (
         tx_id, order_index, author_id, author_timestamp_ms,
         author_feed_sequence, candidate_digest, canonical_candidate,
-        outcome, rejection_code, failing_precondition_id, failing_command_id,
-        failing_rule_id, failing_constraint_id, result_digest
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        outcome, rejection_code, failing_precondition_id,
+        failing_precondition_index, failing_statement_index, failure_phase,
+        failing_constraint_id, result_envelope_version, result_envelope, result_digest
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
     .run(
       row.txId,
@@ -148,9 +157,12 @@ export function insertSystemLogRow(
       row.outcome,
       row.rejectionCode,
       row.failingPreconditionId,
-      row.failingCommandId,
-      row.failingRuleId,
+      row.failingPreconditionIndex,
+      row.failingStatementIndex,
+      row.failurePhase,
       row.failingConstraintId,
+      row.resultEnvelopeVersion,
+      row.resultEnvelope,
       row.resultDigest,
     )
 }
@@ -178,4 +190,10 @@ function asNullableId(value: unknown): number | null {
     throw new Error('MATERIALIZER_CORRUPT_ATTRIBUTION_ID')
   }
   return id
+}
+
+function asNullablePhase(value: unknown): 'precondition' | 'statement' | 'finalize' | null {
+  if (value === null) return null
+  if (value === 'precondition' || value === 'statement' || value === 'finalize') return value
+  throw new Error('MATERIALIZER_CORRUPT_FAILURE_PHASE')
 }

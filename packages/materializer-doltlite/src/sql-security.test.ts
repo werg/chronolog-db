@@ -31,7 +31,7 @@ function database(): DatabaseLike {
   return db
 }
 
-function expectProfileViolation(db: DatabaseLike, sql: string, mode: 'local_read' | 'consensus_precondition' | 'consensus_mutation' = 'consensus_mutation'): void {
+function expectProfileViolation(db: DatabaseLike, sql: string, mode: 'local_read' | 'consensus_precondition' | 'consensus_body' = 'consensus_body'): void {
   expect(() => prepareProfiledStatement(db, sql, mode)).toThrowError(
     expect.objectContaining<Partial<SqlProfileError>>({ code: 'SQL_PROFILE_VIOLATION' }),
   )
@@ -41,8 +41,8 @@ describe('SQL authorization profile', () => {
   it('allows deterministic application DML and explicitly approved functions', () => {
     const db = database()
     try {
-      withProfiledStatement(db, "UPDATE accounts SET value = lower(value) WHERE sign(id) = 1", 'consensus_mutation', (statement) => statement.run())
-      withProfiledStatement(db, 'UPDATE "DoltOn" SET value = upper(value) WHERE id = 1', 'consensus_mutation', (statement) => statement.run())
+      withProfiledStatement(db, "UPDATE accounts SET value = lower(value) WHERE sign(id) = 1", 'consensus_body', (statement) => statement.run())
+      withProfiledStatement(db, 'UPDATE "DoltOn" SET value = upper(value) WHERE id = 1', 'consensus_body', (statement) => statement.run())
       const result = executeLocalSql(db, 'SELECT count(*), max(value) FROM accounts')
       expect(result.rows).toHaveLength(1)
       expect(executeLocalSql(db, 'SELECT value FROM "DoltOn"').rows).toEqual([
@@ -57,13 +57,13 @@ describe('SQL authorization profile', () => {
     const db = database()
     try {
       expect(() => executeLocalSql(db, 'SELECT tx_id, outcome FROM chronolog_transactions')).not.toThrow()
+      expect(() => executeLocalSql(db, "SELECT name FROM pragma_table_info('accounts')")).not.toThrow()
+      expect(() => executeLocalSql(db, "SELECT name FROM sqlite_schema WHERE type = 'table'")).not.toThrow()
       for (const sql of [
         'SELECT * FROM chronolog_materializer_metadata',
         'SELECT * FROM chronolog_checkpoints',
         'SELECT * FROM dolt_log',
         'SELECT * FROM dolt_status',
-        'SELECT * FROM pragma_table_info',
-        'SELECT * FROM sqlite_schema',
       ]) expectProfileViolation(db, sql, 'local_read')
     } finally {
       db.close()
@@ -88,12 +88,17 @@ describe('SQL authorization profile', () => {
     }
   })
 
-  it('denies DDL, transaction control, attachment, pragmas, maintenance and virtual-table creation', () => {
+  it('allows application DDL and denies transaction control, attachment, stateful pragmas, maintenance and virtual tables', () => {
     const db = database()
     try {
-      for (const sql of [
-        'CREATE TABLE attack (id INTEGER)',
+      expect(() => prepareProfiledStatement(db, 'CREATE TABLE attack (id INTEGER)', 'consensus_body')).not.toThrow()
+      expect(() => prepareProfiledStatement(
+        db,
         'CREATE TRIGGER attack AFTER INSERT ON accounts BEGIN DELETE FROM accounts; END',
+        'consensus_body',
+      )).not.toThrow()
+      for (const sql of [
+        'CREATE TEMP TABLE attack (id INTEGER)',
         'BEGIN',
         'SAVEPOINT attack',
         "ATTACH DATABASE ':memory:' AS attack",
@@ -116,8 +121,6 @@ describe('SQL authorization profile', () => {
         'random()',
         'randomblob(8)',
         'current_timestamp',
-        "datetime('now')",
-        "timediff('2020-01-01', '2019-01-01')",
         'changes()',
         'last_insert_rowid()',
         'sqlite_version()',
@@ -131,7 +134,7 @@ describe('SQL authorization profile', () => {
       ]) expectProfileViolation(db, `SELECT ${expression}`, 'consensus_precondition')
       expect(withProfiledStatement(
         db,
-        "SELECT count(*), min(id), max(id), abs(id), sign(max(id)), value GLOB 't*' FROM accounts GROUP BY value",
+        "SELECT count(*), min(id), max(id), abs(id), sign(max(id)), value GLOB 't*', datetime('2000-01-01'), timediff('2020-01-01', '2019-01-01') FROM accounts GROUP BY value",
         'consensus_precondition',
         (statement) => statement.all(),
       )).toHaveLength(2)

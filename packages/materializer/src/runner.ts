@@ -1,6 +1,5 @@
 import {
   digestExecutionManifest,
-  digestSchemaManifest,
 } from '@chronolog/ir'
 import { transactionDigest } from '@chronolog/protocol'
 
@@ -10,7 +9,6 @@ import {
   decodeExecutionManifestArtifact,
   decodeMaterializationContinuation,
   decodeMaterializationInvocation,
-  decodeSchemaManifestArtifact,
   digestMaterializationInvocation,
   sameBytes,
 } from './codec.js'
@@ -52,7 +50,6 @@ export async function resolveDecodedMaterializationInvocation(
     invocation.previous?.manifest,
     invocation.replayBase.manifest,
     invocation.admittedSuffix,
-    invocation.schemaManifest,
     invocation.executionManifest,
     invocation.continuation,
   ].filter((ref): ref is ExactArtifactRef => ref !== undefined && ref !== null)
@@ -67,16 +64,12 @@ export async function resolveDecodedMaterializationInvocation(
     if (bytes === undefined) throw new MaterializerContractError('MATERIALIZER_EXACT_OBJECT_MISSING')
     return bytes
   }
-  const schemaManifest = decodeSchemaManifestArtifact(bytesFor(invocation.schemaManifest))
   const executionManifest = decodeExecutionManifestArtifact(bytesFor(invocation.executionManifest))
   const admittedSuffix = decodeAdmittedSuffix(bytesFor(invocation.admittedSuffix))
   const continuation = invocation.continuation === null
     ? null
     : decodeMaterializationContinuation(bytesFor(invocation.continuation))
 
-  if (!sameBytes(await digestSchemaManifest(schemaManifest), invocation.expectedSchemaDigest)) {
-    throw new MaterializerContractError('MATERIALIZER_SCHEMA_DIGEST_MISMATCH')
-  }
   if (!sameBytes(
     await digestExecutionManifest(executionManifest),
     invocation.expectedExecutionManifestDigest,
@@ -118,7 +111,6 @@ export async function resolveDecodedMaterializationInvocation(
 
   return {
     invocation,
-    schemaManifest,
     executionManifest,
     admittedSuffix,
     continuation,

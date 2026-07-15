@@ -19,18 +19,18 @@ import { ChronologRpcError, toChronologRpcError, type RpcErrorCode } from './err
 
 const unaryDispatch: Record<UnaryRpcMethod, keyof ChronologRpcService> = {
   'node.getStatus': 'getStatus',
-  'query.executeIr': 'executeIr',
   'query.localSql': 'localSql',
   'transaction.beginDraft': 'beginDraft',
-  'transaction.observeIr': 'observeIr',
-  'transaction.addAssertionIr': 'addAssertionIr',
-  'transaction.addExpectation': 'addExpectation',
-  'transaction.addMutationIr': 'addMutationIr',
+  'transaction.observeSql': 'observeSql',
+  'transaction.addPrecondition': 'addPrecondition',
+  'transaction.addStatements': 'addStatements',
+  'transaction.replaceStatements': 'replaceStatements',
   'transaction.validateDraft': 'validateDraft',
   'transaction.rebaseDraft': 'rebaseDraft',
   'transaction.cancelDraft': 'cancelDraft',
   'transaction.publishDraft': 'publishDraft',
   'transaction.getOutcome': 'getOutcome',
+  'transaction.getResult': 'getTransactionResult',
   'evidence.getSettlement': 'getSettlementEvidence',
   'evidence.getValidatorWatermark': 'getValidatorWatermark',
   'node.getReplicationStatus': 'getReplicationStatus',
@@ -38,7 +38,7 @@ const unaryDispatch: Record<UnaryRpcMethod, keyof ChronologRpcService> = {
 
 const streamDispatch: Record<StreamRpcMethod, keyof ChronologRpcService> = {
   'node.streamStatus': 'streamStatus',
-  'query.liveIr': 'liveIr',
+  'query.liveSql': 'liveSql',
   'transaction.streamOutcome': 'streamOutcome',
   'evidence.streamSettlement': 'streamSettlementEvidence',
   'node.streamReplicationStatus': 'streamReplicationStatus',

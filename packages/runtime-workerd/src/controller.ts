@@ -137,16 +137,12 @@ function assertNamedInputs(
 function assertCompatibility(
   invocation: {
     readonly expectedEngineDigest: Uint8Array
-    readonly expectedSchemaDigest: Uint8Array
     readonly expectedExecutionManifestDigest: Uint8Array
   },
   actual: ChronologCompatibilityTuple,
 ): void {
   if (!sameBytes(invocation.expectedEngineDigest, actual.engineDigest)) {
     throw new ChronologWorkerdContractError('CHRONOLOG_ENGINE_COMPATIBILITY_MISMATCH')
-  }
-  if (!sameBytes(invocation.expectedSchemaDigest, actual.schemaDigest)) {
-    throw new ChronologWorkerdContractError('CHRONOLOG_SCHEMA_COMPATIBILITY_MISMATCH')
   }
   if (!sameBytes(invocation.expectedExecutionManifestDigest, actual.executionManifestDigest)) {
     throw new ChronologWorkerdContractError('CHRONOLOG_EXECUTION_COMPATIBILITY_MISMATCH')
@@ -287,7 +283,6 @@ function uniqueReads(reads: readonly ExactObjectRef[]): readonly ExactObjectRef[
 function copyCompatibility(value: ChronologCompatibilityTuple): ChronologCompatibilityTuple {
   return {
     engineDigest: value.engineDigest.slice(),
-    schemaDigest: value.schemaDigest.slice(),
     executionManifestDigest: value.executionManifestDigest.slice(),
   }
 }

@@ -1,28 +1,20 @@
 import type {
-  CanonicalQueryResult,
-  IrDiagnostic as CompilerDiagnostic,
-  Mutation,
-  Query,
-  TransactionProgram,
-} from '@chronolog/ir'
+  CanonicalSqlResult,
+  SqlResultMode,
+  SqlStatement,
+  SqlTransactionProgram,
+  TransactionResultEnvelopeV1,
+} from '@chronolog/protocol'
 
 import type { LocalSqlValue } from './types.js'
 
-export interface DraftExecutionContext {
-  readonly groupId: Uint8Array
-  readonly membershipRevision: Uint8Array
-  readonly validationPolicy: Uint8Array
-  readonly authorId: Uint8Array
-  readonly authorTimestampMs: bigint
-  readonly transactionNonce: Uint8Array
-}
-
-export interface IrQueryExecution {
+export interface SqlObservationExecution {
   readonly revision: bigint
   readonly orderLength: number
-  readonly schemaDigest: Uint8Array
   readonly executionManifestDigest: Uint8Array
-  readonly result: CanonicalQueryResult
+  readonly statement: SqlStatement
+  readonly result: CanonicalSqlResult
+  readonly resultDigest: Uint8Array
 }
 
 export interface LocalSqlExecution {
@@ -30,25 +22,6 @@ export interface LocalSqlExecution {
   readonly orderLength: number
   readonly columns: readonly { readonly name: string; readonly declaredType?: string }[]
   readonly rows: readonly (readonly LocalSqlValue[])[]
-}
-
-/** Immutable query/validation boundary consumed by RPC. */
-export interface NodeRpcIrBackend {
-  readonly revision: bigint
-  readonly orderLength: number
-  readonly schemaDigest: Uint8Array
-  readonly executionManifestDigest: Uint8Array
-  query(query: Query, options: {
-    readonly atRevision: bigint
-    readonly context?: DraftExecutionContext
-  }): IrQueryExecution | Promise<IrQueryExecution>
-  localQuery(
-    sql: string,
-    parameters: readonly LocalSqlValue[],
-    options: { readonly atRevision: bigint },
-  ): LocalSqlExecution | Promise<LocalSqlExecution>
-  validateQuery(query: Query): readonly CompilerDiagnostic[]
-  validateMutation(mutation: Mutation): readonly CompilerDiagnostic[]
 }
 
 export interface RpcNodeCandidate {
@@ -65,17 +38,14 @@ export interface RpcNodeCandidateCore {
   readonly authorTimestampMs: bigint
   readonly validationPolicy: Uint8Array
   readonly membershipRevision: Uint8Array
-  readonly program: { readonly metadata?: ReadonlyMap<string, Uint8Array> }
+  readonly program: SqlTransactionProgram
 }
 
 export interface RpcNodeSettlementEvidence {
   readonly historyReopeningIds: readonly string[]
   readonly unresolvedAttestationIds: readonly Uint8Array[]
   readonly belowWatermark: boolean
-  readonly watermark: {
-    readonly cutoffMs: bigint | null
-    readonly heartbeatIds: readonly Uint8Array[]
-  }
+  readonly watermark: { readonly cutoffMs: bigint | null; readonly heartbeatIds: readonly Uint8Array[] }
 }
 
 export interface RpcNodeWatermark {
@@ -103,10 +73,19 @@ export interface RpcNodeStatusSnapshot {
   }
 }
 
-/**
- * Narrow application-service contract for RPC. It intentionally contains no
- * transport implementation, materializer class, or node lifecycle constructor.
- */
+export interface RpcMaterializedOutcome {
+  readonly outcome: 'accepted' | 'rejected_precondition' | 'rejected_execution'
+  readonly rejectionCode: string | null
+  readonly failingPreconditionId: number | null
+  readonly failingPreconditionIndex: number | null
+  readonly failingStatementIndex: number | null
+  readonly failurePhase: 'precondition' | 'statement' | 'finalize' | null
+  readonly failingConstraintId: number | null
+  readonly resultEnvelopeVersion: 1 | null
+  readonly resultEnvelope: Uint8Array | null
+  readonly resultDigest: Uint8Array | null
+}
+
 export interface ChronologRpcNodeService {
   readonly identity: Uint8Array
   readonly groupId: Uint8Array
@@ -115,50 +94,30 @@ export interface ChronologRpcNodeService {
   readonly revision: bigint
   readonly materializedRevision: bigint
   readonly orderLength: number
-  readonly schemaDigest: Uint8Array
   readonly executionManifestDigest: Uint8Array
   readonly controlStore: {
     listCandidates(): readonly { readonly state: string }[]
-    snapshot(): {
-      readonly historyReopenings: readonly {
-        readonly id: string
-        readonly floorMs: bigint
-        readonly membershipRevision: Uint8Array
-      }[]
-    }
+    snapshot(): { readonly historyReopenings: readonly { readonly id: string; readonly floorMs: bigint; readonly membershipRevision: Uint8Array }[] }
   }
   reserveTransactionContext(): { readonly authorTimestampMs: bigint; readonly nonce: Uint8Array }
-  publish(input: {
-    readonly program: TransactionProgram
-    readonly authorTimestampMs: bigint
-    readonly nonce: Uint8Array
-  }): Promise<{
+  publish(input: { readonly program: SqlTransactionProgram; readonly authorTimestampMs: bigint; readonly nonce: Uint8Array }): Promise<{
     readonly txId: Uint8Array
     readonly txIdText: string
     readonly candidateDigest: Uint8Array
-    readonly core: {
-      readonly authorTimestampMs: bigint
-      readonly nonce: Uint8Array
-    }
+    readonly core: { readonly authorTimestampMs: bigint; readonly nonce: Uint8Array }
   }>
   status(): Promise<RpcNodeStatusSnapshot>
   isWritable(): Promise<boolean>
   candidate(txId: Uint8Array): RpcNodeCandidate | null
   candidateCore(txId: Uint8Array): RpcNodeCandidateCore | null
-  outcome(txId: Uint8Array): unknown
+  outcome(txId: Uint8Array): RpcMaterializedOutcome | null
+  transactionResult(txId: Uint8Array): TransactionResultEnvelopeV1 | null
   outcomeChangedByReplay(txId: Uint8Array): boolean
   settlementEvidence(txId: Uint8Array): Promise<RpcNodeSettlementEvidence | null>
   watermark(): Promise<RpcNodeWatermark | null>
   events(afterRevision?: bigint, signal?: AbortSignal): AsyncIterable<unknown>
-  queryIr(query: Query, options?: {
-    readonly atRevision?: bigint
-    readonly context?: DraftExecutionContext
-  }): IrQueryExecution | Promise<IrQueryExecution>
-  localSql(
-    sql: string,
-    parameters?: readonly LocalSqlValue[],
-    options?: { readonly atRevision?: bigint },
-  ): LocalSqlExecution
-  validateQuery(query: Query): readonly CompilerDiagnostic[]
-  validateMutation(mutation: Mutation): readonly CompilerDiagnostic[]
+  observe(statement: SqlStatement, options: { readonly atRevision?: bigint; readonly resultMode: SqlResultMode }): SqlObservationExecution | Promise<SqlObservationExecution>
+  localSql(sql: string, parameters?: readonly LocalSqlValue[], options?: { readonly atRevision?: bigint }): LocalSqlExecution
+  validateStatement(statement: SqlStatement, mode: 'precondition' | 'body'): readonly { readonly code: string; readonly startByte?: number; readonly endByte?: number }[]
+  validateProgram(program: SqlTransactionProgram): void
 }

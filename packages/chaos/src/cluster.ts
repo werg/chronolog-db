@@ -10,6 +10,7 @@ import type { RunArtifacts } from './artifacts.js'
 import type { ChaosScenario, FaultSpec, LinkName, NodeName, NodeResourceSample } from './types.js'
 import { HttpRpcTransport } from '@chronolog/rpc'
 import { readDockerSystemInfo } from './docker-info.js'
+import { chaosBootstrapStatements } from './schema.js'
 
 const RPC_PORT = 8787
 const SSB_PORT = 8008
@@ -143,7 +144,18 @@ export class ChaosCluster {
         })
         nodes.set(node.name, { name: node.name, container: started, client, url })
       }))
-      return new ChaosCluster(options.prepared, options.scenario, options.artifacts, network, toxiproxy, links, nodes)
+      const cluster = new ChaosCluster(options.prepared, options.scenario, options.artifacts, network, toxiproxy, links, nodes)
+      const bootstrapClient = cluster.client(cluster.nodeNames()[0]!)
+      const bootstrap = await bootstrapClient.transaction((tx) => {
+        tx.assert('SELECT 1')
+        tx.exec(chaosBootstrapStatements(options.scenario.workload.accounts))
+      }, { idempotencyKey: 'chronolog-chaos-bootstrap-v1' })
+      const deadline = Date.now() + 120_000
+      while ((await bootstrapClient.getTransactionOutcome(bootstrap.transactionId)).outcome.type === 'pending') {
+        if (Date.now() >= deadline) throw new Error('CHAOS_BOOTSTRAP_TIMEOUT')
+        await delay(250)
+      }
+      return cluster
     } catch (error) {
       await Promise.allSettled(startedNodes.map((container) => container.stop({ timeout: GRACEFUL_RESTART_TIMEOUT_MS })))
       await toxiproxy?.stop().catch(() => undefined)

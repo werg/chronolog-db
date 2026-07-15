@@ -1,13 +1,14 @@
 import type { ControlStore, StoredAttestation, WatermarkPolicy } from '@chronolog/control-store'
 import type {
   ChronologMaterializationRuntime,
+  MaterializedObservationResult,
   MaterializedLocalSqlResult,
   MaterializedLocalSqlValue,
-  MaterializedQueryResult,
 } from '@chronolog/materializer'
-import type { Query, TransactionProgram } from '@chronolog/ir'
 import type {
   Ed25519KeyPair,
+  SqlStatement,
+  SqlTransactionProgram,
   TransactionCore,
 } from '@chronolog/protocol'
 import type { ChronologTransport, TransportStatus } from '@chronolog/transport-ssb'
@@ -107,7 +108,7 @@ export interface ChronologNodeOptions {
 }
 
 export interface PublishTransactionInput {
-  readonly program: TransactionProgram
+  readonly program: SqlTransactionProgram
   readonly authorTimestampMs?: bigint
   readonly nonce?: Uint8Array
   readonly metadata?: ReadonlyMap<string, Uint8Array>
@@ -144,14 +145,13 @@ export interface NodeStatus {
   readonly materializationPending: boolean
   readonly materializedRevision: bigint
   readonly orderLength: number
-  readonly schemaDigest: Uint8Array
   readonly executionManifestDigest: Uint8Array
   readonly validating: boolean
   readonly lastError?: string
   readonly transport: TransportStatus
 }
 
-export type NodeIrQueryResult = MaterializedQueryResult
+export type NodeObservationResult = MaterializedObservationResult
 export type NodeLocalSqlQueryResult = MaterializedLocalSqlResult
-export type NodeQuery = Query
+export type NodeSqlStatement = SqlStatement
 export type NodeLocalSqlParameter = MaterializedLocalSqlValue

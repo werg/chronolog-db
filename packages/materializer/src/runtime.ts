@@ -1,10 +1,10 @@
 import type {
-  CanonicalQueryResult,
-  IrDiagnostic,
-  Mutation,
-  Query,
-} from '@chronolog/ir'
-import type { TransactionOrderKey } from '@chronolog/protocol'
+  CanonicalSqlResult,
+  SqlResultMode,
+  SqlStatement,
+  TransactionOrderKey,
+  TransactionResultEnvelopeV1,
+} from '@chronolog/protocol'
 
 import type { AdmittedTransaction } from './types.js'
 
@@ -20,9 +20,12 @@ export interface MaterializedTransactionOutcome {
   readonly outcome: MaterializedTransactionOutcomeKind
   readonly rejectionCode: string | null
   readonly failingPreconditionId: number | null
-  readonly failingCommandId: number | null
-  readonly failingRuleId: number | null
+  readonly failingPreconditionIndex: number | null
+  readonly failingStatementIndex: number | null
+  readonly failurePhase: 'precondition' | 'statement' | 'finalize' | null
   readonly failingConstraintId: number | null
+  readonly resultEnvelopeVersion: 1 | null
+  readonly resultEnvelope: Uint8Array | null
   readonly resultDigest: Uint8Array | null
 }
 
@@ -42,7 +45,6 @@ export interface MaterializedRevision {
   readonly replayedTransactions: number
   readonly checkpointPrefix: number
   readonly contentHash: string
-  readonly schemaDigest: Uint8Array
   readonly manifestDigest: Uint8Array
   readonly earliestChangedOrderIndex: number
   readonly outcomeChanges: readonly MaterializationOutcomeChange[]
@@ -75,29 +77,17 @@ export type MaterializedLocalSqlValue =
   | { readonly kind: 'text'; readonly value: string }
   | { readonly kind: 'blob'; readonly value: Uint8Array }
 
-export interface MaterializedQueryContext {
-  readonly groupId?: Uint8Array
-  readonly membershipRevision?: Uint8Array
-  readonly validationPolicy?: Uint8Array
-  readonly authorId?: Uint8Array
-  readonly authorTimestampMs?: bigint
-  readonly transactionNonce?: Uint8Array
-  readonly candidateDigest?: Uint8Array
-  readonly transactionId?: Uint8Array
-  readonly authorFeedSequence?: bigint
-}
-
-export interface MaterializedQueryOptions {
+export interface MaterializedObserveOptions {
   readonly atRevision?: bigint
-  readonly context?: MaterializedQueryContext
+  readonly resultMode: SqlResultMode
 }
 
-export interface MaterializedQueryResult {
+export interface MaterializedObservationResult {
   readonly revision: bigint
   readonly orderLength: number
-  readonly schemaDigest: Uint8Array
   readonly executionManifestDigest: Uint8Array
-  readonly result: CanonicalQueryResult
+  readonly statement: SqlStatement
+  readonly result: CanonicalSqlResult
   readonly resultDigest: Uint8Array
 }
 
@@ -111,7 +101,6 @@ export interface MaterializedLocalSqlResult {
 export interface MaterializedRevisionSnapshot {
   readonly revision: bigint
   readonly orderLength: number
-  readonly schemaDigest: Uint8Array
   readonly executionManifestDigest: Uint8Array
 }
 
@@ -119,18 +108,23 @@ export interface MaterializedRevisionSnapshot {
 export interface MaterializedQueryService {
   readonly revision: bigint
   readonly orderLength: number
-  readonly schemaDigest: Uint8Array
   readonly executionManifestDigest: Uint8Array
-  queryIr(query: Query, options?: MaterializedQueryOptions): Promise<MaterializedQueryResult>
+  observe(statement: SqlStatement, options: MaterializedObserveOptions): Promise<MaterializedObservationResult>
   localSql(
     sql: string,
     parameters?: readonly MaterializedLocalSqlValue[],
     options?: { readonly atRevision?: bigint },
   ): MaterializedLocalSqlResult
-  validateQuery(query: Query): readonly IrDiagnostic[]
-  validateMutation(mutation: Mutation): readonly IrDiagnostic[]
+  validateStatement(statement: SqlStatement, mode: 'precondition' | 'body'): readonly MaterializedSqlDiagnostic[]
   outcome(txId: Uint8Array): MaterializedTransactionOutcome | null
+  transactionResult(txId: Uint8Array): TransactionResultEnvelopeV1 | null
   subscribe(subscriber: (revision: MaterializedRevisionSnapshot) => void): () => void
+}
+
+export interface MaterializedSqlDiagnostic {
+  readonly code: string
+  readonly startByte?: number
+  readonly endByte?: number
 }
 
 export interface MaterializationPublicationResult extends MaterializedRevisionSnapshot {
@@ -158,7 +152,7 @@ export function publicationRequestForRevision(
   revision: MaterializedRevision,
 ): MaterializationPublicationRequest {
   return {
-    publicationKey: `legacy:${revision.contentHash}`,
+    publicationKey: `revision:${revision.contentHash}`,
     expectedRevision: revision.previousRevision,
     targetRevision: revision.revision,
     targetOrderLength: revision.orderLength,

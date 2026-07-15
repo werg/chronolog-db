@@ -1,9 +1,3 @@
-import {
-  assertValidTransactionProgram,
-  transactionProgramFromCanonicalCbor,
-  transactionProgramToCanonicalCbor,
-  type TransactionProgram,
-} from '@chronolog/ir'
 import { hashDomain as hashCanonicalDomain } from '@chronolog/canonical'
 
 import { compareBytes, concatBytes, equalBytes } from './bytes.js'
@@ -14,6 +8,12 @@ import {
   assertKnownIntegerKeys, expectArray, expectBytes, expectMap, expectUint64,
   expectVersion, integerMap, optional, required,
 } from './schema.js'
+import {
+  assertValidSqlTransactionProgram,
+  sqlTransactionProgramFromCanonicalCbor,
+  sqlTransactionProgramToCanonicalCbor,
+  type SqlTransactionProgram,
+} from './sql.js'
 
 export interface TransactionCore {
   readonly groupId: Uint8Array
@@ -23,8 +23,7 @@ export interface TransactionCore {
   readonly authorTimestampMs: bigint
   readonly nonce: Uint8Array
   readonly executionManifestDigest: Uint8Array
-  readonly schemaDigest: Uint8Array
-  readonly program: TransactionProgram
+  readonly program: SqlTransactionProgram
   readonly metadata?: ReadonlyMap<string, Uint8Array>
 }
 
@@ -66,12 +65,11 @@ function transactionToCbor(value: TransactionCore): CborValue {
   protocolInvariant(value.authorTimestampMs >= 0n && value.authorTimestampMs <= (1n << 63n) - 1n, 'INTEGER_OUT_OF_RANGE', 'Author timestamp must be a nonnegative int64')
   protocolInvariant(value.nonce.length >= 16, 'SCHEMA_INVALID', 'Transaction nonce must contain at least 16 bytes')
   protocolInvariant(value.executionManifestDigest.length === 32, 'SCHEMA_INVALID', 'Execution-manifest digest must contain 32 bytes')
-  protocolInvariant(value.schemaDigest.length === 32, 'SCHEMA_INVALID', 'Schema digest must contain 32 bytes')
-  assertValidTransactionProgram(value.program)
+  assertValidSqlTransactionProgram(value.program)
   return integerMap([
     [0, 1n], [1, value.groupId], [2, value.membershipRevision], [3, value.validationPolicy],
     [4, value.authorId], [5, value.authorTimestampMs], [6, value.nonce], [7, value.executionManifestDigest],
-    [8, value.schemaDigest], [9, transactionProgramToCanonicalCbor(value.program)], [10, metadataToCbor(value.metadata)],
+    [8, sqlTransactionProgramToCanonicalCbor(value.program)], [9, metadataToCbor(value.metadata)],
   ])
 }
 
@@ -79,15 +77,15 @@ export function encodeTransactionCore(value: TransactionCore): Uint8Array { retu
 
 export function decodeTransactionCore(bytes: Uint8Array): TransactionCore {
   const map = expectMap(assertCanonicalCbor(bytes), 'transaction')
-  assertKnownIntegerKeys(map, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 'transaction')
+  assertKnownIntegerKeys(map, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9], 'transaction')
   expectVersion(map, 1n, 'transaction')
   const authorTimestampMs = expectUint64(required(map, 5, 'transaction.author_timestamp_ms'), 'transaction.author_timestamp_ms')
   protocolInvariant(authorTimestampMs <= (1n << 63n) - 1n, 'INTEGER_OUT_OF_RANGE', 'Author timestamp is outside nonnegative int64')
   const nonce = expectBytes(required(map, 6, 'transaction.nonce'), 'transaction.nonce')
   protocolInvariant(nonce.length >= 16, 'SCHEMA_INVALID', 'Transaction nonce must contain at least 16 bytes')
-  const program = transactionProgramFromCanonicalCbor(required(map, 9, 'transaction.program'))
-  assertValidTransactionProgram(program)
-  const metadata = optional(map, 10)
+  const program = sqlTransactionProgramFromCanonicalCbor(required(map, 8, 'transaction.program'))
+  assertValidSqlTransactionProgram(program)
+  const metadata = optional(map, 9)
   return {
     groupId: expectBytes(required(map, 1, 'transaction.group_id'), 'transaction.group_id', 32),
     membershipRevision: expectBytes(required(map, 2, 'transaction.membership_revision'), 'transaction.membership_revision', 32),
@@ -95,7 +93,6 @@ export function decodeTransactionCore(bytes: Uint8Array): TransactionCore {
     authorId: expectBytes(required(map, 4, 'transaction.author_id'), 'transaction.author_id', 32),
     authorTimestampMs, nonce,
     executionManifestDigest: expectBytes(required(map, 7, 'transaction.execution_manifest_digest'), 'transaction.execution_manifest_digest', 32),
-    schemaDigest: expectBytes(required(map, 8, 'transaction.schema_digest'), 'transaction.schema_digest', 32),
     program,
     ...(metadata === undefined ? {} : { metadata: metadataFromCbor(metadata) }),
   }

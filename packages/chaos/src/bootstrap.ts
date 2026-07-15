@@ -2,11 +2,9 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
 
-import { encodeSchemaManifest } from '@chronolog/ir'
 import { exportEd25519PrivateKey, generateEd25519KeyPair } from '@chronolog/protocol'
 
 import type { SeededRandom } from './rng.js'
-import { chaosSchema } from './schema.js'
 import type { ChaosScenario, NodeName } from './types.js'
 
 const require = createRequire(import.meta.url)
@@ -67,7 +65,6 @@ export async function prepareCluster(
       privateKeyPkcs8: Buffer.from(await exportEd25519PrivateKey(identity.privateKey)).toString('base64'),
     }, 0o600)
     await writeFile(join(directory, 'secret'), `${JSON.stringify(ssb, null, 2)}\n`, { mode: 0o600 })
-    await writeFile(join(directory, 'schema.cbor'), encodeSchemaManifest(chaosSchema(scenario.workload.accounts)), { mode: 0o600 })
     nodes.push({ name, directory, publicKey, validatorCapability, ssb })
   }
 

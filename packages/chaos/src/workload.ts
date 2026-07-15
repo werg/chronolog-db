@@ -39,9 +39,12 @@ export async function runWorkload(options: {
       })
       try {
         const handle = await options.cluster.client(node).transaction(async (draft) => {
-          const observed = await draft.observe(queries[account]!, undefined, { applicationLabel: 'chaos.observe_balance' })
+          const query = queries[account]!
+          const observed = await draft.observe(query.sql, query.parameters, { resultMode: 'scalar', applicationLabel: 'chaos.observe_balance' })
           draft.expect(observed, { applicationLabel: 'chaos.expect_balance' })
-          draft.update(balanceUpdate(account, observed.value + BigInt(delta)))
+          const balance = observed.result.rows[0]?.[0]
+          if (typeof balance !== 'bigint') throw new Error('CHAOS_BALANCE_RESULT_INVALID')
+          draft.exec(balanceUpdate(account, balance + BigInt(delta)))
         }, {
           idempotencyKey: `${options.random.seed}:${operationId}`,
           signal: AbortSignal.timeout(15_000),

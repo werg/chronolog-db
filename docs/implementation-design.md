@@ -1,6 +1,7 @@
 # Chronolog DB Implementation Design
 
-Status: Draft 0.1
+Status: Historical implementation background. The SQL-first runtime is defined
+by the [implementation specification suite](implementation-specs/README.md).
 
 Date: 2026-07-13
 
@@ -18,7 +19,7 @@ The first implementation must provide:
   relay, or any permitted combination.
 - Secure Scuttlebutt replication of candidates, attestations, heartbeats,
   capabilities, recovery events, and encryption-epoch metadata.
-- Deterministic admission, ordering, relational IR reduction, checkpointing, and suffix
+- Deterministic admission, ordering, signed SQL reduction, checkpointing, and suffix
   replay.
 - A local API for typed/local SQL reads, typed transaction construction, reactive queries,
   outcomes, membership administration, and settlement evidence.
@@ -451,11 +452,11 @@ filtering.
 
 For each transaction, the reducer:
 
-1. Validates schema, execution manifest, typed IR, effects, and deterministic
-   order.
+1. Parses and validates the exact signed SQL and canonical bindings against the
+   pinned execution manifest and current prefix catalog.
 2. Opens a top-level SQLite transaction for that candidate.
-3. Evaluates mandatory assertion/expectation query IR in order.
-4. Executes compiled mutations, rules, constraints, and derived-index updates.
+3. Evaluates mandatory assertion/expectation SQL preconditions in order.
+4. Executes the ordered SQL body, including DDL, DML, and bounded results.
 5. Appends the accepted `chronolog_transactions` row and commits atomically.
 6. On deterministic rejection, fully rolls back and writes only the rejected
    row in a fresh top-level transaction.
@@ -467,13 +468,12 @@ present. Because the protected log is a main-database table, each Dolt
 checkpoint commits the application state and matching outcome-log prefix as a
 single versioned snapshot.
 
-### 12.3 Schema construction and future changes
+### 12.3 Schema construction and evolution
 
-Fresh databases are constructed only from canonical schema IR. The current
-raw-SQL prototype database is recreated rather than migrated. Transactions pin
-the schema digest they target. Ordered schema-change transactions may be added
-after the core reducer is complete and require schema-admin capability; they
-are not part of the prototype cutover.
+Fresh groups start with an empty application schema. Ordinary replicated SQL
+DDL creates and evolves it in the same atomic body as data changes. The schema
+at a prefix is restored by the selected checkpoint and replayed suffix; there
+is no authoritative schema artifact or schema digest.
 
 ## 13. Materialization and checkpoints
 

@@ -1,32 +1,22 @@
-import { createHash } from 'node:crypto'
-
 import {
-  CompilerError,
   compileManifestArtifacts,
-  compileMutation,
-  compileProgram,
-  compileQuery,
-  compileSchema,
-  storageType,
-  type CompiledSchema,
+  compileSqlProgram,
+  compileSqlStatement,
+  SqlCompilerError,
   type ManifestArtifacts,
-  type TransactionContextValues,
 } from '@chronolog/compiler-sqlite'
-import {
-  digestCanonicalQueryResult,
-  validateQuery as validateIrQuery,
-  validateTransactionProgram,
-  type ExecutionManifest,
-  type IrDiagnostic,
-  type Mutation,
-  type Query,
-  type SchemaManifest,
-} from '@chronolog/ir'
+import type { ExecutionManifest } from '@chronolog/ir'
 import {
   compareTransactionOrder,
+  decodeTransactionResultEnvelope,
+  digestCanonicalSqlResult,
+  digestTransactionResultEnvelope,
+  encodeTransactionResultEnvelope,
   encodeTransactionCore,
   transactionDigest,
+  type SqlStatement,
   type TransactionOrderKey,
+  type TransactionResultEnvelopeV1,
 } from '@chronolog/protocol'
 
 import {
@@ -45,14 +35,13 @@ import {
   type PublishedRef,
 } from './checkpoints.js'
 import { openDatabase } from './driver.js'
+import { isOperationalSqliteError, withAuthorizer } from './sql-profile.js'
 import {
-  DeterministicIrRejection,
-  bindBackendParameters,
-  evaluateCompiledPrecondition,
-  executeCompiledMutation,
-  executeCompiledQuery,
-} from './ir-executor.js'
-import { isOperationalSqliteError, withProfiledStatement } from './sql-profile.js'
+  DeterministicSqlRejection,
+  evaluateSqlPrecondition,
+  executeSqlBodyStatement,
+  executeSqlObservation,
+} from './sql-executor.js'
 import { executeLocalSql } from './sql-values.js'
 import {
   initializeSystemLog,
@@ -67,15 +56,14 @@ import type {
   LocalSqlOptions,
   LocalSqlQueryResult,
   LocalSqlValue,
-  MaterializedIrQueryResult,
+  MaterializedSqlQueryResult,
   MaterializedRevision,
   MaterializerBackendInfo,
   MaterializerCheckpointInfo,
-  MaterializerIrBackend,
+  MaterializerSqlBackend,
   MaterializerOptions,
   OutcomeChange,
-  QueryExecutionContext,
-  QueryIrOptions,
+  ObserveSqlOptions,
   RevisionSubscriber,
   StoredExecutionManifest,
   TransactionLogRow,
@@ -90,13 +78,13 @@ export class MaterializerInputError extends Error {
   }
 }
 
-export class DeterministicMaterializer implements MaterializerIrBackend {
+export class DeterministicMaterializer implements MaterializerSqlBackend {
   readonly #writer: DatabaseLike
   #reader: DatabaseLike
   readonly #sourceOptions: MaterializerOptions
   readonly #options: Required<Pick<MaterializerOptions, 'checkpointEvery' | 'retainCheckpoints'>>
   readonly #backend: MaterializerBackendInfo
-  readonly #compiledSchema: CompiledSchema
+  readonly #executionManifest: ExecutionManifest
   readonly #artifacts: ManifestArtifacts
   readonly #subscribers = new Set<RevisionSubscriber>()
   #published: PublishedRef
@@ -112,7 +100,7 @@ export class DeterministicMaterializer implements MaterializerIrBackend {
     reader: DatabaseLike,
     options: MaterializerOptions,
     backend: MaterializerBackendInfo,
-    compiledSchema: CompiledSchema,
+    executionManifest: ExecutionManifest,
     artifacts: ManifestArtifacts,
     published: PublishedRef,
     checkpoints: MaterializerCheckpointInfo[],
@@ -122,7 +110,7 @@ export class DeterministicMaterializer implements MaterializerIrBackend {
     this.#reader = reader
     this.#sourceOptions = options
     this.#backend = backend
-    this.#compiledSchema = compiledSchema
+    this.#executionManifest = structuredClone(executionManifest)
     this.#artifacts = artifacts
     this.#published = published
     this.#checkpoints = checkpoints
@@ -135,8 +123,7 @@ export class DeterministicMaterializer implements MaterializerIrBackend {
   }
 
   static async open(options: MaterializerOptions): Promise<DeterministicMaterializer> {
-    const compiledSchema = compileSchema(options.schemaManifest, options.executionManifest)
-    const artifacts = await compileManifestArtifacts(options.schemaManifest, options.executionManifest)
+    const artifacts = await compileManifestArtifacts(options.executionManifest)
     const opened = openDatabase(options)
     let reader: DatabaseLike | null = null
     try {
@@ -145,15 +132,16 @@ export class DeterministicMaterializer implements MaterializerIrBackend {
       }
       let published = discoverPublishedRef(opened.database)
       if (published === null) {
-        published = initializeRepository(opened.database, compiledSchema, artifacts)
+        published = initializeRepository(opened.database, artifacts)
       } else {
         resetActiveWorkingSet(opened.database)
         opened.database.doltCheckout(HEAD_BRANCH)
-        verifyDatabaseState(opened.database, compiledSchema, artifacts)
+        verifyDatabaseState(opened.database, artifacts)
       }
       const log = readSystemLog(opened.database)
+      await verifyLogResultIntegrity(log)
       verifyPublishedLog(published, log)
-      const checkpoints = validateCheckpointRefs(opened.database, published, log, artifacts)
+      const checkpoints = await validateCheckpointRefs(opened.database, published, log, artifacts)
       cleanupOrphanBranches(opened.database, published, checkpoints)
 
       const readerOpened = openDatabase(options)
@@ -162,8 +150,9 @@ export class DeterministicMaterializer implements MaterializerIrBackend {
         throw new MaterializerInputError('MATERIALIZER_ENGINE_DIGEST_MISMATCH')
       }
       reader.doltCheckout(published.branchRef)
-      verifyDatabaseState(reader, compiledSchema, artifacts)
+      verifyDatabaseState(reader, artifacts)
       const readerLog = readSystemLog(reader)
+      await verifyLogResultIntegrity(readerLog)
       verifyPublishedLog(published, readerLog)
       if (reader.doltHashOf(published.branchRef) !== published.contentHash) {
         throw new Error('MATERIALIZER_READER_CONTENT_MISMATCH')
@@ -173,7 +162,7 @@ export class DeterministicMaterializer implements MaterializerIrBackend {
         reader,
         options,
         opened.backend,
-        compiledSchema,
+        options.executionManifest,
         artifacts,
         published,
         checkpoints,
@@ -188,10 +177,8 @@ export class DeterministicMaterializer implements MaterializerIrBackend {
 
   get revision(): bigint { return this.#published.revision }
   get orderLength(): number { return this.#order.length }
-  get schemaDigest(): Uint8Array { return copyBytes(this.#artifacts.schemaDigest) }
   get executionManifestDigest(): Uint8Array { return copyBytes(this.#artifacts.executionManifestDigest) }
-  get schemaManifest(): SchemaManifest { return structuredClone(this.#compiledSchema.schema) }
-  get executionManifest(): ExecutionManifest { return structuredClone(this.#compiledSchema.executionManifest) }
+  get executionManifest(): ExecutionManifest { return structuredClone(this.#executionManifest) }
   get backend(): MaterializerBackendInfo { return structuredClone(this.#backend) }
   get checkpointError(): string | null { return this.#checkpointError }
 
@@ -211,47 +198,47 @@ export class DeterministicMaterializer implements MaterializerIrBackend {
       outcome: row.outcome,
       rejectionCode: row.rejectionCode,
       failingPreconditionId: row.failingPreconditionId,
-      failingCommandId: row.failingCommandId,
-      failingRuleId: row.failingRuleId,
+      failingPreconditionIndex: row.failingPreconditionIndex,
+      failingStatementIndex: row.failingStatementIndex,
+      failurePhase: row.failurePhase,
       failingConstraintId: row.failingConstraintId,
+      resultEnvelopeVersion: row.resultEnvelopeVersion,
+      resultEnvelope: row.resultEnvelope === null ? null : copyBytes(row.resultEnvelope),
       resultDigest: row.resultDigest === null ? null : copyBytes(row.resultDigest),
     }
   }
 
-  async queryIr(query: Query, options: QueryIrOptions = {}): Promise<MaterializedIrQueryResult> {
+  transactionResult(txId: Uint8Array): TransactionResultEnvelopeV1 | null {
+    const row = this.#log.find((entry) => bytesEqual(entry.txId, txId))
+    if (row?.resultEnvelope === null || row?.resultEnvelope === undefined) return null
+    return decodeTransactionResultEnvelope(row.resultEnvelope)
+  }
+
+  async observe(statement: SqlStatement, options: ObserveSqlOptions): Promise<MaterializedSqlQueryResult> {
     this.#assertOpen()
     this.#assertRevision(options.atRevision)
-    // Pin the observation metadata before executing. JavaScript does not
-    // interleave synchronous query execution, but keeping this snapshot
-    // explicit prevents a future asynchronous executor or digest refactor from
-    // pairing rows from one immutable reader with another published revision.
     const observation = {
       revision: this.revision,
       orderLength: this.orderLength,
-      schemaDigest: this.schemaDigest,
       executionManifestDigest: this.executionManifestDigest,
     }
-    const diagnostics = this.validateQuery(query)
+    const diagnostics = this.validateStatement(statement, 'precondition')
     if (diagnostics.length > 0) throw new MaterializerInputError(diagnostics[0]!.code)
-    const compiled = compileQuery(query, this.#compiledSchema.catalog)
-    const result = executeCompiledQuery(
+    const result = executeSqlObservation(
       this.#reader,
-      compiled,
-      normalizeQueryContext(options.context),
-      this.#compiledSchema.executionManifest.resources.maxQueryRows,
-      this.#compiledSchema.executionManifest.resources.maxResultBytes,
+      statement,
+      options.resultMode,
+      this.#executionManifest.resources.maxQueryRows,
+      this.#executionManifest.resources.maxResultBytes,
       {},
     )
-    const resultDigest = await digestCanonicalQueryResult(result)
+    const resultDigest = await digestCanonicalSqlResult(result)
     return {
       ...observation,
+      statement: structuredClone(statement),
       result,
       resultDigest,
     }
-  }
-
-  query(query: Query, options: QueryIrOptions = {}): Promise<MaterializedIrQueryResult> {
-    return this.queryIr(query, options)
   }
 
   localSql(
@@ -273,47 +260,12 @@ export class DeterministicMaterializer implements MaterializerIrBackend {
     return this.localSql(sql, parameters, options)
   }
 
-  validateQuery(query: Query): readonly IrDiagnostic[] {
-    const validation = validateIrQuery(query, {
-      schema: this.#compiledSchema.schema,
-      manifest: this.#compiledSchema.executionManifest,
-    })
-    if (!validation.ok) return validation.diagnostics
+  validateStatement(statement: SqlStatement, mode: 'precondition' | 'body') {
     try {
-      compileQuery(query, this.#compiledSchema.catalog)
+      compileSqlStatement(statement, mode)
       return []
     } catch (error) {
-      return [compilerDiagnostic(error, query.id)]
-    }
-  }
-
-  validateMutation(mutation: Mutation): readonly IrDiagnostic[] {
-    const validation = validateTransactionProgram({
-      preconditions: [{
-        kind: 'assert', id: 9_000_000_000_000_000,
-        query: {
-          id: 9_000_000_000_000_001,
-          ctes: [], joins: [], groupBy: [], windows: [], compounds: [], orderBy: [],
-          projection: [{
-            id: 9_000_000_000_000_002,
-            name: 'valid',
-            expression: { kind: 'literal', id: 9_000_000_000_000_003, value: { kind: 'boolean', value: true } },
-          }],
-          resultMode: { kind: 'scalar' },
-        },
-        unknownIsFailure: true,
-      }],
-      mutations: [mutation],
-    }, {
-      schema: this.#compiledSchema.schema,
-      manifest: this.#compiledSchema.executionManifest,
-    })
-    if (!validation.ok) return validation.diagnostics
-    try {
-      compileMutation(mutation, this.#compiledSchema.catalog)
-      return []
-    } catch (error) {
-      return [compilerDiagnostic(error, mutation.id)]
+      return [sqlCompilerDiagnostic(error)]
     }
   }
 
@@ -353,8 +305,10 @@ export class DeterministicMaterializer implements MaterializerIrBackend {
 
       replayBranch = createReplayBranch(this.#writer, nextRevision, baseRef)
       this.#writer.doltCheckout(replayBranch)
-      verifyDatabaseState(this.#writer, this.#compiledSchema, this.#artifacts)
-      verifyReplayBase(readSystemLog(this.#writer), transactions, replayFrom)
+      verifyDatabaseState(this.#writer, this.#artifacts)
+      const replayLog = readSystemLog(this.#writer)
+      await verifyLogResultIntegrity(replayLog)
+      verifyReplayBase(replayLog, transactions, replayFrom)
 
       for (let index = replayFrom; index < transactions.length; index += 1) {
         verifyNextLogIndex(this.#writer, index)
@@ -362,8 +316,9 @@ export class DeterministicMaterializer implements MaterializerIrBackend {
       }
 
       const candidateLog = readSystemLog(this.#writer)
+      await verifyLogResultIntegrity(candidateLog)
       verifyDesiredLog(candidateLog, transactions)
-      verifyDatabaseState(this.#writer, this.#compiledSchema, this.#artifacts)
+      verifyDatabaseState(this.#writer, this.#artifacts)
       const commitHash = this.#writer.doltCommit(`chronolog revision ${nextRevision}`)
       const contentHash = this.#writer.doltHashOf(commitHash)
       if (contentHash !== this.#writer.doltHashOf()) throw new Error('MATERIALIZER_COMMIT_CONTENT_MISMATCH')
@@ -381,8 +336,9 @@ export class DeterministicMaterializer implements MaterializerIrBackend {
       const candidateOpened = openDatabase(this.#sourceOptions)
       candidateReader = candidateOpened.database
       candidateReader.doltCheckout(revisionBranch)
-      verifyDatabaseState(candidateReader, this.#compiledSchema, this.#artifacts)
+      verifyDatabaseState(candidateReader, this.#artifacts)
       const readerLog = readSystemLog(candidateReader)
+      await verifyLogResultIntegrity(readerLog)
       verifyPublishedLog(nextPublished, readerLog)
       if (candidateReader.doltHashOf(revisionBranch) !== contentHash) {
         throw new Error('MATERIALIZER_CANDIDATE_READER_CONTENT_MISMATCH')
@@ -417,7 +373,6 @@ export class DeterministicMaterializer implements MaterializerIrBackend {
         replayedTransactions: transactions.length - replayFrom,
         checkpointPrefix: checkpoint?.prefixLength ?? replayFrom,
         contentHash,
-        schemaDigest: this.schemaDigest,
         manifestDigest: this.executionManifestDigest,
         earliestChangedOrderIndex: difference,
         outcomeChanges: calculateOutcomeChanges(previousLog, this.#log),
@@ -458,30 +413,42 @@ export class DeterministicMaterializer implements MaterializerIrBackend {
     this.#writer.exec('BEGIN IMMEDIATE')
     this.#writer.exec('SAVEPOINT chronolog_program')
     try {
-      if (!bytesEqual(transaction.core.schemaDigest, this.#artifacts.schemaDigest)) {
-        throw new DeterministicIrRejection('SCHEMA_DIGEST_MISMATCH')
-      }
       if (!bytesEqual(transaction.core.executionManifestDigest, this.#artifacts.executionManifestDigest)) {
-        throw new DeterministicIrRejection('EXECUTION_MANIFEST_DIGEST_MISMATCH')
+        throw new DeterministicSqlRejection('EXECUTION_MANIFEST_DIGEST_MISMATCH', 'finalize')
       }
-      const compiled = compileProgram(transaction.core.program, this.#compiledSchema.catalog)
-      const context = contextOf(transaction)
-      const preconditionDigests: Uint8Array[] = []
-      for (const precondition of compiled.preconditions) {
-        preconditionDigests.push(await evaluateCompiledPrecondition(
+      compileSqlProgram(transaction.core.program)
+      const preconditionResults = []
+      for (const [index, precondition] of transaction.core.program.preconditions.entries()) {
+        preconditionResults.push(await evaluateSqlPrecondition(
           this.#writer,
           precondition,
-          context,
-          this.#compiledSchema.executionManifest.resources.maxQueryRows,
-          this.#compiledSchema.executionManifest.resources.maxResultBytes,
+          index,
+          this.#executionManifest.resources.maxQueryRows,
+          this.#executionManifest.resources.maxResultBytes,
         ))
       }
-      const affectedRows: bigint[] = []
-      for (const mutation of compiled.mutations) {
-        affectedRows.push(executeCompiledMutation(this.#writer, mutation, context))
+      const statementResults = []
+      for (const [index, statement] of transaction.core.program.body.entries()) {
+        statementResults.push(executeSqlBodyStatement(
+          this.#writer,
+          statement,
+          index,
+          this.#executionManifest.resources.maxQueryRows,
+          this.#executionManifest.resources.maxResultBytes,
+        ))
       }
-      const resultDigest = acceptedResultDigest(preconditionDigests, affectedRows)
-      insertSystemLogRow(this.#writer, logRow(transaction, orderIndex, 'accepted', null, { resultDigest }))
+      const envelope: TransactionResultEnvelopeV1 = {
+        version: 1,
+        preconditions: preconditionResults,
+        statements: statementResults,
+      }
+      const resultEnvelope = encodeTransactionResultEnvelope(envelope)
+      const resultDigest = await digestTransactionResultEnvelope(resultEnvelope)
+      insertSystemLogRow(this.#writer, logRow(transaction, orderIndex, 'accepted', null, {
+        resultEnvelopeVersion: 1,
+        resultEnvelope,
+        resultDigest,
+      }))
       this.#writer.exec('RELEASE SAVEPOINT chronolog_program')
       this.#writer.exec('COMMIT')
     } catch (error) {
@@ -502,7 +469,7 @@ export class DeterministicMaterializer implements MaterializerIrBackend {
         insertSystemLogRow(this.#writer, logRow(
           transaction,
           orderIndex,
-          rejection.failingPreconditionId === null ? 'rejected_execution' : 'rejected_precondition',
+          rejection.failurePhase === 'precondition' ? 'rejected_precondition' : 'rejected_execution',
           rejection.code,
           rejection,
         ))
@@ -548,28 +515,27 @@ export class DeterministicMaterializer implements MaterializerIrBackend {
 interface Rejection {
   readonly code: string
   readonly failingPreconditionId: number | null
-  readonly failingCommandId: number | null
-  readonly failingRuleId: number | null
+  readonly failingPreconditionIndex: number | null
+  readonly failingStatementIndex: number | null
+  readonly failurePhase: 'precondition' | 'statement' | 'finalize' | null
   readonly failingConstraintId: number | null
+  readonly resultEnvelopeVersion: 1 | null
+  readonly resultEnvelope: Uint8Array | null
   readonly resultDigest: Uint8Array | null
 }
 
 function initializeRepository(
   database: DatabaseLike,
-  compiledSchema: CompiledSchema,
   artifacts: ManifestArtifacts,
 ): PublishedRef {
   if (!isFreshRepository(database)) throw new Error('MATERIALIZER_RESERVED_HEAD_MISSING')
   database.exec('BEGIN IMMEDIATE')
   try {
-    initializeSystemLog(database)
-    insertExecutionManifest(database, storedManifest(artifacts))
-    for (const statement of compiledSchema.statements) {
-      withProfiledStatement(database, statement.sql, 'internal_schema', (prepared) => {
-        prepared.run(...bindBackendParameters(statement.parameters, {}))
-      })
-    }
-    verifyDatabaseState(database, compiledSchema, artifacts)
+    withAuthorizer(database, 'internal_bootstrap', () => {
+      initializeSystemLog(database)
+      insertExecutionManifest(database, storedManifest(artifacts))
+    })
+    verifyDatabaseState(database, artifacts)
     database.exec('COMMIT')
   } catch (error) {
     rollbackIfActive(database)
@@ -596,56 +562,17 @@ function isFreshRepository(database: DatabaseLike): boolean {
 
 function verifyDatabaseState(
   database: DatabaseLike,
-  compiledSchema: CompiledSchema,
   artifacts: ManifestArtifacts,
 ): void {
   verifyStoredManifest(readExecutionManifest(database), artifacts)
-  const actualObjects = database.prepare(`
-    SELECT name, type FROM sqlite_schema
-     WHERE type IN ('table', 'index', 'view', 'trigger')
-       AND sql IS NOT NULL
-       AND name NOT LIKE 'sqlite_%'
-       AND name NOT LIKE 'dolt%'
-       AND name NOT LIKE 'chronolog_%'
-     ORDER BY name
-  `).all().map((row) => {
-    if (Array.isArray(row)) throw new Error('DATABASE_SCHEMA_MISMATCH')
-    return `${String(row.type)}:${String(row.name)}`
-  })
-  const expectedObjects = compiledSchema.schema.objects.map((object) =>
-    `${object.kind === 'table' ? 'table' : object.kind === 'index' ? 'index' : object.kind}:${object.name}`,
-  ).sort()
-  if (actualObjects.length !== expectedObjects.length ||
-      actualObjects.some((value, index) => value !== expectedObjects[index])) {
-    throw new Error('DATABASE_SCHEMA_MISMATCH')
-  }
-  for (const object of compiledSchema.schema.objects) {
-    const expectedType = object.kind === 'table' ? 'table' : object.kind === 'index' ? 'index' : null
-    if (expectedType === null) throw new Error('DATABASE_SCHEMA_OBJECT_UNSUPPORTED')
-    const row = database.prepare('SELECT type FROM sqlite_schema WHERE name = ?').get(object.name)
-    if (row === undefined || Array.isArray(row) || row.type !== expectedType) {
-      throw new Error('DATABASE_SCHEMA_MISMATCH')
-    }
-    if (object.kind === 'table') {
-      const columns = database.prepare(`PRAGMA table_info("${object.name}")`).all()
-      if (columns.length !== object.columns.length) throw new Error('DATABASE_SCHEMA_MISMATCH')
-      for (const column of object.columns) {
-        const actual = columns.find((item) => !Array.isArray(item) && item.name === column.name)
-        if (actual === undefined || Array.isArray(actual) ||
-            String(actual.type).toUpperCase() !== storageType(column.valueType.logical)) {
-          throw new Error('DATABASE_SCHEMA_MISMATCH')
-        }
-      }
-    }
-  }
 }
 
-function validateCheckpointRefs(
+async function validateCheckpointRefs(
   database: DatabaseLike,
   published: PublishedRef,
   publishedLog: readonly TransactionLogRow[],
   artifacts: ManifestArtifacts,
-): MaterializerCheckpointInfo[] {
+): Promise<MaterializerCheckpointInfo[]> {
   const valid: MaterializerCheckpointInfo[] = []
   for (const checkpoint of discoverCheckpoints(database)) {
     const expectedDigest = orderDigest(publishedLog.slice(0, checkpoint.prefixLength))
@@ -658,6 +585,7 @@ function validateCheckpointRefs(
       database.doltCheckout(checkpoint.branchRef)
       verifyStoredManifest(readExecutionManifest(database), artifacts)
       const checkpointLog = readSystemLog(database)
+      await verifyLogResultIntegrity(checkpointLog)
       matches = checkpointLog.length === checkpoint.prefixLength && orderDigest(checkpointLog) === expectedDigest
     } catch { matches = false }
     database.doltCheckout(HEAD_BRANCH)
@@ -671,6 +599,31 @@ function validateCheckpointRefs(
   if (!valid.some((checkpoint) => checkpoint.prefixLength === 0)) throw new Error('MATERIALIZER_GENESIS_CHECKPOINT_MISSING')
   verifyPublishedLog(published, publishedLog)
   return valid.sort((left, right) => left.prefixLength - right.prefixLength)
+}
+
+async function verifyLogResultIntegrity(log: readonly TransactionLogRow[]): Promise<void> {
+  for (const row of log) {
+    if (row.outcome === 'accepted') {
+      if (
+        row.rejectionCode !== null || row.failurePhase !== null ||
+        row.failingPreconditionId !== null || row.failingPreconditionIndex !== null ||
+        row.failingStatementIndex !== null || row.failingConstraintId !== null ||
+        row.resultEnvelopeVersion !== 1 || row.resultEnvelope === null || row.resultDigest === null
+      ) throw new Error('MATERIALIZER_CORRUPT_ACCEPTED_RESULT_RECORD')
+      const envelope = decodeTransactionResultEnvelope(row.resultEnvelope)
+      if (!bytesEqual(encodeTransactionResultEnvelope(envelope), row.resultEnvelope)) {
+        throw new Error('MATERIALIZER_NONCANONICAL_RESULT_ENVELOPE')
+      }
+      if (!bytesEqual(await digestTransactionResultEnvelope(row.resultEnvelope), row.resultDigest)) {
+        throw new Error('MATERIALIZER_RESULT_DIGEST_MISMATCH')
+      }
+    } else if (
+      row.rejectionCode === null || row.failurePhase === null ||
+      row.resultEnvelopeVersion !== null || row.resultEnvelope !== null || row.resultDigest !== null
+    ) {
+      throw new Error('MATERIALIZER_CORRUPT_REJECTED_RESULT_RECORD')
+    }
+  }
 }
 
 async function validateTransactionSet(transactions: readonly AdmittedTransaction[]): Promise<void> {
@@ -796,75 +749,42 @@ function earliestDifference(previous: readonly Uint8Array[], next: readonly Uint
   return previous.length === next.length ? null : length
 }
 
-function contextOf(transaction: AdmittedTransaction): TransactionContextValues {
-  return {
-    group_id: copyBytes(transaction.core.groupId),
-    membership_revision: copyBytes(transaction.core.membershipRevision),
-    validation_policy: copyBytes(transaction.core.validationPolicy),
-    author_id: copyBytes(transaction.core.authorId),
-    author_timestamp_ms: transaction.core.authorTimestampMs,
-    transaction_nonce: copyBytes(transaction.core.nonce),
-    candidate_digest: copyBytes(transaction.candidateDigest),
-    transaction_id: copyBytes(transaction.txId),
-    author_feed_sequence: transaction.authorFeedSequence,
-  }
-}
-
-function normalizeQueryContext(context: QueryExecutionContext | undefined): Partial<TransactionContextValues> {
-  if (context === undefined) return {}
-  return {
-    ...(context.group_id === undefined && context.groupId === undefined ? {} : { group_id: copyBytes(context.group_id ?? context.groupId!) }),
-    ...(context.membership_revision === undefined && context.membershipRevision === undefined ? {} : { membership_revision: copyBytes(context.membership_revision ?? context.membershipRevision!) }),
-    ...(context.validation_policy === undefined && context.validationPolicy === undefined ? {} : { validation_policy: copyBytes(context.validation_policy ?? context.validationPolicy!) }),
-    ...(context.author_id === undefined && context.authorId === undefined ? {} : { author_id: copyBytes(context.author_id ?? context.authorId!) }),
-    ...(context.author_timestamp_ms === undefined && context.authorTimestampMs === undefined ? {} : { author_timestamp_ms: context.author_timestamp_ms ?? context.authorTimestampMs! }),
-    ...(context.transaction_nonce === undefined && context.transactionNonce === undefined ? {} : { transaction_nonce: copyBytes(context.transaction_nonce ?? context.transactionNonce!) }),
-    ...(context.candidate_digest === undefined && context.candidateDigest === undefined ? {} : { candidate_digest: copyBytes(context.candidate_digest ?? context.candidateDigest!) }),
-    ...(context.transaction_id === undefined && context.transactionId === undefined ? {} : { transaction_id: copyBytes(context.transaction_id ?? context.transactionId!) }),
-    ...(context.author_feed_sequence === undefined && context.authorFeedSequence === undefined ? {} : { author_feed_sequence: context.author_feed_sequence ?? context.authorFeedSequence! }),
-  }
-}
-
-function acceptedResultDigest(preconditions: readonly Uint8Array[], affectedRows: readonly bigint[]): Uint8Array {
-  const hash = createHash('sha256').update('chronolog-accepted-result-v1\0', 'utf8')
-  for (const digest of preconditions) hash.update(digest)
-  for (const count of affectedRows) {
-    const text = Buffer.from(count.toString(10), 'utf8')
-    const length = Buffer.allocUnsafe(4)
-    length.writeUInt32BE(text.length)
-    hash.update(length).update(text)
-  }
-  return Uint8Array.from(hash.digest())
-}
-
 function deterministicRejection(error: unknown): Rejection | null {
-  if (error instanceof DeterministicIrRejection) {
+  if (error instanceof DeterministicSqlRejection) {
     return {
       code: error.code,
-      failingPreconditionId: error.failingPreconditionId,
-      failingCommandId: error.failingCommandId,
-      failingRuleId: null,
+      failingPreconditionId: error.preconditionId,
+      failingPreconditionIndex: error.preconditionIndex,
+      failingStatementIndex: error.statementIndex,
+      failurePhase: error.phase,
       failingConstraintId: error.failingConstraintId,
+      resultEnvelopeVersion: null,
+      resultEnvelope: null,
       resultDigest: null,
     }
   }
-  if (error instanceof CompilerError) {
+  if (error instanceof SqlCompilerError) {
     return {
       code: error.code,
-      failingPreconditionId: error.attribution === 'precondition' ? error.nodeId : null,
-      failingCommandId: error.attribution === 'command' ? error.nodeId : null,
-      failingRuleId: null,
-      failingConstraintId: error.attribution === 'constraint' ? error.nodeId : null,
+      failingPreconditionId: null,
+      failingPreconditionIndex: null,
+      failingStatementIndex: null,
+      failurePhase: 'finalize',
+      failingConstraintId: null,
+      resultEnvelopeVersion: null,
+      resultEnvelope: null,
       resultDigest: null,
     }
   }
   return null
 }
 
-function compilerDiagnostic(error: unknown, fallbackNodeId: number): IrDiagnostic {
-  if (error instanceof CompilerError) return { code: error.code, message: error.code, nodeId: error.nodeId ?? fallbackNodeId }
-  if (error instanceof Error) return { code: 'IR_COMPILER_REJECTED', message: error.message, nodeId: fallbackNodeId }
-  return { code: 'IR_COMPILER_REJECTED', message: 'IR compiler rejected the node', nodeId: fallbackNodeId }
+function sqlCompilerDiagnostic(error: unknown) {
+  if (error instanceof SqlCompilerError) return {
+    code: error.code,
+    ...(error.span === null ? {} : { startByte: error.span.startByte, endByte: error.span.endByte }),
+  }
+  return { code: error instanceof Error ? error.message : 'SQL_COMPILER_REJECTED' }
 }
 
 function logRow(
@@ -885,9 +805,12 @@ function logRow(
     outcome,
     rejectionCode,
     failingPreconditionId: details.failingPreconditionId ?? null,
-    failingCommandId: details.failingCommandId ?? null,
-    failingRuleId: details.failingRuleId ?? null,
+    failingPreconditionIndex: details.failingPreconditionIndex ?? null,
+    failingStatementIndex: details.failingStatementIndex ?? null,
+    failurePhase: details.failurePhase ?? null,
     failingConstraintId: details.failingConstraintId ?? null,
+    resultEnvelopeVersion: details.resultEnvelopeVersion ?? null,
+    resultEnvelope: details.resultEnvelope ?? null,
     resultDigest: details.resultDigest ?? null,
   }
 }
@@ -896,16 +819,12 @@ function storedManifest(artifacts: ManifestArtifacts): StoredExecutionManifest {
   return {
     manifestDigest: artifacts.executionManifestDigest,
     canonicalManifest: artifacts.canonicalExecutionManifest,
-    schemaDigest: artifacts.schemaDigest,
-    canonicalSchema: artifacts.canonicalSchema,
   }
 }
 
 function verifyStoredManifest(stored: StoredExecutionManifest, artifacts: ManifestArtifacts): void {
   if (!bytesEqual(stored.manifestDigest, artifacts.executionManifestDigest) ||
-      !bytesEqual(stored.canonicalManifest, artifacts.canonicalExecutionManifest) ||
-      !bytesEqual(stored.schemaDigest, artifacts.schemaDigest) ||
-      !bytesEqual(stored.canonicalSchema, artifacts.canonicalSchema)) {
+      !bytesEqual(stored.canonicalManifest, artifacts.canonicalExecutionManifest)) {
     throw new Error('DATABASE_MANIFEST_MISMATCH')
   }
 }

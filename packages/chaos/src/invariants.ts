@@ -1,4 +1,6 @@
-import type { DecodedLogicalValue } from '@chronolog/client'
+import { createHash } from 'node:crypto'
+
+import type { DecodedLocalSqlValue } from '@chronolog/client'
 
 import type { RunArtifacts } from './artifacts.js'
 import type { ChaosCluster } from './cluster.js'
@@ -80,16 +82,16 @@ async function snapshotNode(
   const [status, replication, state, log] = await Promise.all([
     client.getStatus(),
     client.getReplicationStatus(),
-    client.query(stateQuery()),
-    client.query(transactionLogQuery()),
+    client.query(stateQuery().sql),
+    client.query(transactionLogQuery().sql),
   ])
   if (!status.revision) throw new Error(`CHAOS_NODE_NOT_READY:${node}`)
   return {
     node,
     status: status.state,
     ...(status.lastErrorCode === undefined ? {} : { lastErrorCode: status.lastErrorCode }),
-    stateDigest: state.canonical.resultDigest,
-    logDigest: log.canonical.resultDigest,
+    stateDigest: rowsDigest(state.result.rows),
+    logDigest: rowsDigest(log.result.rows),
     stateRows: state.result.rows.map(normalizeRow),
     logRows: log.result.rows.map(normalizeRow),
     eventSetRevision: status.revision.eventSetRevision,
@@ -104,10 +106,14 @@ async function snapshotNode(
   }
 }
 
-function normalizeRow(row: readonly DecodedLogicalValue[]): readonly unknown[] {
+function normalizeRow(row: readonly DecodedLocalSqlValue[]): readonly unknown[] {
   return row.map((value) => value instanceof Uint8Array
     ? { bytes: Buffer.from(value).toString('base64url') }
     : typeof value === 'bigint' ? value.toString(10) : value)
+}
+
+function rowsDigest(rows: readonly (readonly DecodedLocalSqlValue[])[]): string {
+  return createHash('sha256').update(JSON.stringify(rows.map(normalizeRow))).digest('base64url')
 }
 
 function bytesText(value: unknown): string {

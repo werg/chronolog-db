@@ -8,12 +8,12 @@ import {
   type StoredCandidate,
   type WatermarkEvidence,
 } from '@chronolog/control-store'
-import type { Mutation, Query } from '@chronolog/ir'
+import { compileSqlProgram } from '@chronolog/compiler-sqlite'
 import type {
   AdmittedTransaction,
   MaterializedLocalSqlResult,
   MaterializedLocalSqlValue,
-  MaterializedQueryResult,
+  MaterializedObservationResult,
   MaterializedTransactionOutcome,
 } from '@chronolog/materializer'
 import {
@@ -28,6 +28,9 @@ import {
   transactionOrderKey,
   utf8,
   type TransactionCore,
+  type SqlTransactionProgram,
+  type SqlStatement,
+  type SqlResultMode,
   type ValidatorAttestation,
   type ValidatorHeartbeat,
 } from '@chronolog/protocol'
@@ -109,7 +112,6 @@ export class ChronologNode {
   get groupId(): Uint8Array { return this.#options.groupId.slice() }
   get membershipRevision(): Uint8Array { return this.#options.membershipRevision.slice() }
   get validationPolicy(): Uint8Array { return this.#options.validationPolicy.slice() }
-  get schemaDigest(): Uint8Array { return this.#options.materialization.queries.schemaDigest }
   get executionManifestDigest(): Uint8Array {
     return this.#options.materialization.queries.executionManifestDigest
   }
@@ -155,6 +157,7 @@ export class ChronologNode {
 
   async publish(input: PublishTransactionInput): Promise<PublishedTransaction> {
     this.#assertReady()
+    compileSqlProgram(input.program)
     const membershipRevision = input.membershipRevision ?? this.#options.membershipRevision
     const validationPolicy = input.validationPolicy ?? this.#options.validationPolicy
     const allocated = input.authorTimestampMs === undefined && input.nonce === undefined
@@ -177,7 +180,6 @@ export class ChronologNode {
       authorTimestampMs,
       nonce: allocated.nonce,
       executionManifestDigest: this.executionManifestDigest,
-      schemaDigest: this.schemaDigest,
       program: input.program,
       ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
     }
@@ -200,6 +202,10 @@ export class ChronologNode {
     const record = await this.#options.transport.publish(envelope, { timestampMs: Number(authorTimestampMs) })
     await this.ingest(record)
     return { txId: utf8(record.id), txIdText: record.id, candidateDigest, core }
+  }
+
+  validateProgram(program: SqlTransactionProgram): void {
+    compileSqlProgram(program)
   }
 
   async publishHeartbeat(): Promise<void> {
@@ -268,11 +274,11 @@ export class ChronologNode {
     })
   }
 
-  queryIr(
-    query: Query,
-    options?: Parameters<ChronologNodeOptions['materialization']['queries']['queryIr']>[1],
-  ): Promise<MaterializedQueryResult> {
-    return this.#materializerQueryIr(query, options)
+  observe(
+    statement: SqlStatement,
+    options: { readonly atRevision?: bigint; readonly resultMode: SqlResultMode },
+  ): Promise<MaterializedObservationResult> {
+    return this.#options.materialization.queries.observe(statement, options)
   }
 
   localSql(
@@ -283,16 +289,16 @@ export class ChronologNode {
     return this.#materializerLocalSql(sql, parameters, options)
   }
 
-  validateQuery(query: Query): ReturnType<ChronologNodeOptions['materialization']['queries']['validateQuery']> {
-    return this.#options.materialization.queries.validateQuery(query)
-  }
-
-  validateMutation(mutation: Mutation): ReturnType<ChronologNodeOptions['materialization']['queries']['validateMutation']> {
-    return this.#options.materialization.queries.validateMutation(mutation)
+  validateStatement(statement: SqlStatement, mode: 'precondition' | 'body') {
+    return this.#options.materialization.queries.validateStatement(statement, mode)
   }
 
   outcome(txId: Uint8Array): MaterializedTransactionOutcome | null {
     return this.#options.materialization.queries.outcome(txId)
+  }
+
+  transactionResult(txId: Uint8Array) {
+    return this.#options.materialization.queries.transactionResult(txId)
   }
 
   outcomeChangedByReplay(txId: Uint8Array): boolean {
@@ -349,7 +355,6 @@ export class ChronologNode {
       materializationPending: this.#materializationPending,
       materializedRevision: this.#options.materialization.queries.revision,
       orderLength: this.#options.materialization.queries.orderLength,
-      schemaDigest: this.schemaDigest,
       executionManifestDigest: this.executionManifestDigest,
       validating: this.#options.validator !== undefined,
       transport: await this.#options.transport.status(),
@@ -411,10 +416,10 @@ export class ChronologNode {
     if (!await this.#canUseTransportAuthor(record, 'writer', signer, core.membershipRevision)) {
       invalid('CANDIDATE_TRANSPORT_AUTHOR_UNAUTHORIZED')
     }
-    if (!equalBytes(core.schemaDigest, this.schemaDigest)) invalid('CANDIDATE_SCHEMA_DIGEST_MISMATCH')
     if (!equalBytes(core.executionManifestDigest, this.executionManifestDigest)) {
       invalid('CANDIDATE_EXECUTION_MANIFEST_DIGEST_MISMATCH')
     }
+    try { compileSqlProgram(core.program) } catch { invalid('CANDIDATE_SQL_INVALID') }
     const writerContext = {
       groupId: core.groupId,
       membershipRevision: core.membershipRevision,
@@ -630,7 +635,6 @@ export class ChronologNode {
       if (
         published.revision !== coordinated.revision.revision ||
         published.orderLength !== coordinated.revision.orderLength ||
-        !equalBytes(published.schemaDigest, coordinated.revision.schemaDigest) ||
         !equalBytes(published.executionManifestDigest, coordinated.revision.manifestDigest)
       ) {
         throw new Error('MATERIALIZATION_PUBLICATION_RESULT_MISMATCH')
@@ -645,7 +649,6 @@ export class ChronologNode {
       reconciled.revision !== queries.revision ||
       reconciled.orderLength !== ordered.length ||
       reconciled.orderLength !== queries.orderLength ||
-      !equalBytes(reconciled.schemaDigest, queries.schemaDigest) ||
       !equalBytes(reconciled.executionManifestDigest, queries.executionManifestDigest)
     ) {
       throw new Error('MATERIALIZATION_RECONCILIATION_RESULT_MISMATCH')
@@ -944,12 +947,6 @@ export class ChronologNode {
     if (proposed > this.#acceptedAboveMs) this.#acceptedAboveMs = proposed
   }
   #randomBytes(length: number): Uint8Array { return this.#options.random?.bytes(length) ?? randomBytes(length) }
-  #materializerQueryIr(
-    query: Query,
-    options?: Parameters<ChronologNodeOptions['materialization']['queries']['queryIr']>[1],
-  ): Promise<MaterializedQueryResult> {
-    return this.#options.materialization.queries.queryIr(query, options)
-  }
   #materializerLocalSql(
     sql: string,
     parameters: readonly MaterializedLocalSqlValue[],

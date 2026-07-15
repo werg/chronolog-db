@@ -2,297 +2,73 @@ syntax = "proto3";
 
 package chronolog.v1;
 
-// Canonical bytes are raw bytes in protobuf and unpadded base64url strings in
-// the TypeScript JSON/NDJSON transport. Servers always decode and validate IR.
-
+// Canonical bytes are raw bytes here and unpadded base64url in the JSON RPC
+// transport. SQL source is UTF-8 text and is never rendered from another IR.
 message Revision {
   string group_id = 1;
   uint64 event_set_revision = 2;
   uint64 materialized_revision = 3;
   uint64 published_order_length = 4;
-  bytes schema_digest = 5;
-  bytes execution_manifest_digest = 6;
-  bool replaying = 7;
+  bytes execution_manifest_digest = 5;
+  bool replaying = 6;
 }
-
 message StatusRequest { optional string group_id = 1; string request_id = 2; }
-message StatusStreamRequest {
-  optional string group_id = 1;
-  string request_id = 2;
-  optional uint64 resume_after_event_set_revision = 3;
-}
-message NodeStatus {
-  string api_version = 1;
-  string state = 2;
-  string node_id = 3;
-  optional Revision revision = 4;
-  bool writable = 5;
-  bool validating = 6;
-  optional string last_error_code = 7;
-}
+message StatusStreamRequest { optional string group_id = 1; string request_id = 2; optional uint64 resume_after_event_set_revision = 3; }
+message NodeStatus { string api_version = 1; string state = 2; string node_id = 3; optional Revision revision = 4; bool writable = 5; bool validating = 6; optional string last_error_code = 7; }
 
-message LogicalResultColumn {
-  uint32 id = 1;
-  string name = 2;
-  string logical_type = 3;
-  bool nullable = 4;
-  optional uint32 precision = 5;
-  optional uint32 scale = 6;
-  optional string vector_element = 7;
-  optional uint32 vector_dimensions = 8;
-}
-message DisplayValue {
-  string kind = 1;
-  optional string text = 2;
-  optional bytes bytes_value = 3;
-  optional bool boolean_value = 4;
-  optional sint32 scale = 5;
-  optional string vector_element = 6;
-  optional uint32 vector_dimensions = 7;
-}
-message DisplayRow { repeated DisplayValue values = 1; }
-message CanonicalQueryResult {
-  repeated LogicalResultColumn schema = 1;
-  string result_mode = 2;
-  bytes canonical_result = 3;
-  bytes result_digest = 4;
-  repeated DisplayRow display_rows = 5;
-  bool display_truncated = 6;
-}
-message ExecuteIrRequest {
-  string group_id = 1;
-  string request_id = 2;
-  bytes query_ir = 3;
-  bytes parameters = 4;
-  optional uint32 max_display_rows = 5;
-  optional uint64 at_revision = 6;
-  repeated string parameter_names = 7;
-}
-message ExecuteIrResponse {
-  Revision revision = 1;
-  bytes query_digest = 2;
-  CanonicalQueryResult result = 3;
-}
-message LiveQueryCursor {
-  string group_id = 1;
-  bytes query_digest = 2;
-  uint64 event_set_revision = 3;
-}
-message LiveIrRequest {
-  string group_id = 1;
-  string request_id = 2;
-  bytes query_ir = 3;
-  bytes parameters = 4;
-  optional uint32 max_display_rows = 5;
-  optional LiveQueryCursor resume = 6;
-  repeated string parameter_names = 7;
-}
-message LiveIrEvent {
-  string type = 1;
-  Revision revision = 2;
-  bytes query_digest = 3;
-  CanonicalQueryResult result = 4;
-  optional uint64 previous_materialized_revision = 5;
-  optional string reset_reason = 6;
-}
-
-message LocalSqlValue {
-  string kind = 1;
-  optional string exact_value = 2;
-  optional double real_value = 3;
-  optional bytes blob_value = 4;
-}
+message LocalSqlValue { string kind = 1; optional string exact_value = 2; optional double real_value = 3; optional bytes blob_value = 4; }
 message LocalSqlRow { repeated LocalSqlValue values = 1; }
 message LocalSqlColumn { string name = 1; optional string declared_type = 2; }
-message LocalSqlRequest {
-  string group_id = 1;
-  string request_id = 2;
-  string sql = 3;
-  repeated LocalSqlValue parameters = 4;
-  optional uint32 max_rows = 5;
-  optional uint64 at_revision = 6;
-}
-message LocalSqlResponse {
-  Revision revision = 1;
-  repeated LocalSqlColumn columns = 2;
-  repeated LocalSqlRow rows = 3;
-  bool truncated = 4;
-}
+message LocalSqlRequest { string group_id = 1; string request_id = 2; string sql = 3; repeated LocalSqlValue parameters = 4; optional uint32 max_rows = 5; optional uint64 at_revision = 6; }
+message LocalSqlResult { repeated LocalSqlColumn columns = 1; repeated LocalSqlRow rows = 2; bool truncated = 3; }
+message LocalSqlResponse { Revision revision = 1; LocalSqlResult result = 2; }
+message LiveSqlCursor { string group_id = 1; bytes query_digest = 2; uint64 event_set_revision = 3; }
+message LiveSqlRequest { string group_id = 1; string request_id = 2; string sql = 3; repeated LocalSqlValue parameters = 4; optional uint32 max_rows = 5; optional LiveSqlCursor resume = 6; }
+message LiveSqlEvent { string type = 1; Revision revision = 2; bytes query_digest = 3; optional LocalSqlResult result = 4; optional uint64 previous_materialized_revision = 5; optional string reset_reason = 6; }
 
-message BeginDraftRequest {
-  string group_id = 1;
-  string request_id = 2;
-  optional uint64 at_revision = 3;
-  optional uint64 ttl_ms = 4;
+message SqlBinding {
+  oneof parameter { uint32 parameter_index = 1; string parameter_name = 2; }
+  bytes canonical_logical_value = 3;
 }
-message BeginDraftResponse {
-  string draft_id = 1;
-  Revision pinned_revision = 2;
-  bytes schema_digest = 3;
-  bytes execution_manifest_digest = 4;
-  sint64 reserved_author_timestamp_ms = 5;
-  bytes transaction_nonce = 6;
-  string expires_at = 7;
+message SqlStatement { string sql = 1; repeated SqlBinding bindings = 2; }
+message CanonicalSqlResult { string result_mode = 1; bytes canonical_result = 2; bytes result_digest = 3; }
+
+message BeginDraftRequest { string group_id = 1; string request_id = 2; optional uint64 at_revision = 3; optional uint64 ttl_ms = 4; }
+message BeginDraftResponse { string draft_id = 1; Revision pinned_revision = 2; bytes execution_manifest_digest = 3; sint64 reserved_author_timestamp_ms = 4; bytes transaction_nonce = 5; string expires_at = 6; }
+message DraftReference { string group_id = 1; string draft_id = 2; string request_id = 3; }
+message ObserveSqlRequest { string group_id = 1; string draft_id = 2; string request_id = 3; SqlStatement statement = 4; string result_mode = 5; optional string application_label = 6; }
+message ObserveSqlResponse { string observation_id = 1; string observation_token = 2; Revision revision = 3; SqlStatement statement = 4; CanonicalSqlResult result = 5; }
+
+message ObservationExpectation { string observation_id = 1; string observation_token = 2; }
+message InlineExpectation { uint32 id = 1; SqlStatement statement = 2; string result_mode = 3; bytes canonical_result = 4; }
+message DigestExpectation { uint32 id = 1; SqlStatement statement = 2; string result_mode = 3; bytes result_digest = 4; }
+message AssertTrueExpectation { uint32 id = 1; SqlStatement statement = 2; }
+message AddPreconditionRequest {
+  string group_id = 1; string draft_id = 2; string request_id = 3;
+  oneof source { ObservationExpectation observation = 4; InlineExpectation inline = 5; DigestExpectation digest = 6; AssertTrueExpectation assert_true = 7; }
+  optional string application_label = 8;
 }
-message DraftReference {
-  string group_id = 1;
-  string draft_id = 2;
-  string request_id = 3;
-}
-message ObserveIrRequest {
-  string group_id = 1;
-  string draft_id = 2;
-  string request_id = 3;
-  bytes query_ir = 4;
-  bytes parameters = 5;
-  optional uint32 max_display_rows = 6;
-  optional string application_label = 7;
-  repeated string parameter_names = 8;
-}
-message ObserveIrResponse {
-  string observation_id = 1;
-  string observation_token = 2;
-  Revision revision = 3;
-  bytes query_digest = 4;
-  repeated string depends_on_context = 5;
-  CanonicalQueryResult result = 6;
-}
-message AddAssertionIrRequest {
-  string group_id = 1;
-  string draft_id = 2;
-  string request_id = 3;
-  bytes query_ir = 4;
-  bytes parameters = 5;
-  optional string application_label = 6;
-  repeated string parameter_names = 7;
-}
-message AddExpectationRequest {
-  string group_id = 1;
-  string draft_id = 2;
-  string request_id = 3;
-  string source_kind = 4;
-  optional string observation_id = 5;
-  optional string observation_token = 6;
-  optional bytes query_ir = 7;
-  optional bytes parameters = 8;
-  optional bytes canonical_result = 9;
-  optional string application_label = 10;
-  repeated string parameter_names = 11;
-}
-message AddMutationIrRequest {
-  string group_id = 1;
-  string draft_id = 2;
-  string request_id = 3;
-  bytes mutation_ir = 4;
-  optional string application_label = 5;
-}
-message IrDiagnostic {
-  uint32 node_id = 1;
-  string code = 2;
-  string severity = 3;
-  string message = 4;
-  optional string application_label = 5;
-}
-message DraftMutationResponse {
-  string draft_id = 1;
-  uint64 draft_revision = 2;
-  uint32 precondition_count = 3;
-  uint32 mutation_count = 4;
-  repeated IrDiagnostic diagnostics = 5;
-  string expires_at = 6;
-}
-message RebaseDraftRequest {
-  string group_id = 1;
-  string draft_id = 2;
-  string request_id = 3;
-  optional uint64 to_revision = 4;
-  bool refresh_observations = 5;
-  bool renew_context = 6;
-}
-message RebaseDraftResponse {
-  DraftMutationResponse draft = 1;
-  Revision pinned_revision = 2;
-  bytes schema_digest = 3;
-  bytes execution_manifest_digest = 4;
-  sint64 reserved_author_timestamp_ms = 5;
-  bytes transaction_nonce = 6;
-  repeated ObserveIrResponse refreshed_observations = 7;
-  repeated string invalidated_observation_ids = 8;
-}
+message AddStatementsRequest { string group_id = 1; string draft_id = 2; string request_id = 3; repeated SqlStatement statements = 4; }
+message ReplaceStatementsRequest { string group_id = 1; string draft_id = 2; string request_id = 3; repeated SqlStatement statements = 4; }
+message SqlDiagnostic { string code = 1; string severity = 2; optional uint32 precondition_index = 3; optional uint32 statement_index = 4; optional uint32 start_byte = 5; optional uint32 end_byte = 6; optional string application_label = 7; }
+message DraftMutationResponse { string draft_id = 1; uint64 draft_revision = 2; uint32 precondition_count = 3; uint32 statement_count = 4; repeated SqlDiagnostic diagnostics = 5; string expires_at = 6; }
+message RebaseDraftRequest { string group_id = 1; string draft_id = 2; string request_id = 3; optional uint64 to_revision = 4; bool refresh_observations = 5; bool renew_context = 6; }
+message RefreshedObservation { ObserveSqlResponse observation = 1; bool changed = 2; }
+message RebaseDraftResponse { DraftMutationResponse draft = 1; Revision pinned_revision = 2; bytes execution_manifest_digest = 3; sint64 reserved_author_timestamp_ms = 4; bytes transaction_nonce = 5; repeated RefreshedObservation refreshed_observations = 6; repeated string invalidated_observation_ids = 7; }
 message CancelDraftResponse { string draft_id = 1; bool cancelled = 2; }
-message PublishDraftRequest {
-  string group_id = 1;
-  string draft_id = 2;
-  string request_id = 3;
-  string idempotency_key = 4;
-}
-message PublishDraftResponse {
-  string transaction_id = 1;
-  bytes candidate_digest = 2;
-  sint64 author_timestamp_ms = 3;
-  bytes transaction_nonce = 4;
-  bytes schema_digest = 5;
-  bytes execution_manifest_digest = 6;
-  bool durable_local_append = 7;
-  string published_at = 8;
-}
+message PublishDraftRequest { string group_id = 1; string draft_id = 2; string request_id = 3; string idempotency_key = 4; }
+message PublishDraftResponse { string transaction_id = 1; bytes candidate_digest = 2; sint64 author_timestamp_ms = 3; bytes transaction_nonce = 4; bytes execution_manifest_digest = 5; bool durable_local_append = 6; string published_at = 7; }
 
-message TransactionRequest {
-  string group_id = 1;
-  string transaction_id = 2;
-  string request_id = 3;
-  optional uint64 resume_after_event_set_revision = 4;
-}
-message RejectionAttribution {
-  string code = 1;
-  optional uint32 precondition_id = 2;
-  optional uint32 command_id = 3;
-  optional uint32 rule_id = 4;
-  optional uint32 constraint_id = 5;
-  optional string application_label = 6;
-}
-message TransactionOutcome {
-  string transaction_id = 1;
-  string phase = 2;
-  string outcome_type = 3;
-  optional RejectionAttribution rejection = 4;
-  uint64 event_set_revision = 5;
-  uint64 materialized_revision = 6;
-  optional string order_key = 7;
-  bool changed_by_replay = 8;
-  bool admissible = 9;
-  string observed_at = 10;
-}
-message SettlementEvidence {
-  string transaction_id = 1;
-  TransactionOutcome outcome = 2;
-  uint64 evidence_revision = 3;
-  string order_key = 4;
-  sint64 author_timestamp_ms = 5;
-  bytes validation_policy_id = 6;
-  bytes membership_revision = 7;
-  optional sint64 policy_watermark_ms = 8;
-  string confidence = 9;
-  string calculated_at = 10;
-}
-message ValidatorWatermark {
-  string group_id = 1;
-  uint64 revision = 2;
-  bytes policy_id = 3;
-  bytes membership_revision = 4;
-  optional sint64 timestamp_ms = 5;
-  repeated bytes supporting_validators = 6;
-  repeated bytes blocked_by = 7;
-}
-message ReplicationStatus {
-  string group_id = 1;
-  uint64 revision = 2;
-  uint32 connected_peers = 3;
-  uint32 known_peers = 4;
-  uint32 feeds_with_gaps = 5;
-  uint32 pending_payloads = 6;
-  string state = 7;
-}
+message TransactionRequest { string group_id = 1; string transaction_id = 2; string request_id = 3; optional uint64 resume_after_event_set_revision = 4; }
+message AcceptedResultReference { uint32 envelope_version = 1; bytes digest = 2; uint64 byte_length = 3; }
+message RejectionAttribution { string phase = 1; string code = 2; optional uint32 precondition_id = 3; optional uint32 precondition_index = 4; optional uint32 statement_index = 5; optional uint32 constraint_id = 6; optional string application_label = 7; }
+message TransactionOutcome { string transaction_id = 1; string phase = 2; string outcome_type = 3; optional AcceptedResultReference accepted_result = 4; optional RejectionAttribution rejection = 5; uint64 event_set_revision = 6; uint64 materialized_revision = 7; optional string order_key = 8; bool changed_by_replay = 9; bool admissible = 10; string observed_at = 11; }
+message GetTransactionResultRequest { string group_id = 1; string transaction_id = 2; string request_id = 3; optional uint64 at_materialized_revision = 4; }
+message GetTransactionResultResponse { Revision revision = 1; string transaction_id = 2; AcceptedResultReference reference = 3; bytes canonical_envelope = 4; }
+
+message SettlementEvidence { string transaction_id = 1; TransactionOutcome outcome = 2; uint64 evidence_revision = 3; string order_key = 4; sint64 author_timestamp_ms = 5; bytes validation_policy_id = 6; bytes membership_revision = 7; optional sint64 policy_watermark_ms = 8; string confidence = 9; string calculated_at = 10; }
+message ValidatorWatermark { string group_id = 1; uint64 revision = 2; bytes policy_id = 3; bytes membership_revision = 4; optional sint64 timestamp_ms = 5; repeated bytes supporting_validators = 6; repeated bytes blocked_by = 7; }
+message ReplicationStatus { string group_id = 1; uint64 revision = 2; uint32 connected_peers = 3; uint32 known_peers = 4; uint32 feeds_with_gaps = 5; uint32 pending_payloads = 6; uint32 ingestion_backlog = 7; bool materialization_pending = 8; string state = 9; }
 
 service NodeService {
   rpc GetStatus(StatusRequest) returns (NodeStatus);
@@ -300,22 +76,19 @@ service NodeService {
   rpc GetReplicationStatus(StatusRequest) returns (ReplicationStatus);
   rpc StreamReplicationStatus(StatusStreamRequest) returns (stream ReplicationStatus);
 }
-service QueryService {
-  rpc ExecuteIr(ExecuteIrRequest) returns (ExecuteIrResponse);
-  rpc LiveIr(LiveIrRequest) returns (stream LiveIrEvent);
-  rpc LocalSql(LocalSqlRequest) returns (LocalSqlResponse);
-}
+service QueryService { rpc LocalSql(LocalSqlRequest) returns (LocalSqlResponse); rpc LiveSql(LiveSqlRequest) returns (stream LiveSqlEvent); }
 service TransactionService {
   rpc BeginDraft(BeginDraftRequest) returns (BeginDraftResponse);
-  rpc ObserveIr(ObserveIrRequest) returns (ObserveIrResponse);
-  rpc AddAssertionIr(AddAssertionIrRequest) returns (DraftMutationResponse);
-  rpc AddExpectation(AddExpectationRequest) returns (DraftMutationResponse);
-  rpc AddMutationIr(AddMutationIrRequest) returns (DraftMutationResponse);
+  rpc ObserveSql(ObserveSqlRequest) returns (ObserveSqlResponse);
+  rpc AddPrecondition(AddPreconditionRequest) returns (DraftMutationResponse);
+  rpc AddStatements(AddStatementsRequest) returns (DraftMutationResponse);
+  rpc ReplaceStatements(ReplaceStatementsRequest) returns (DraftMutationResponse);
   rpc ValidateDraft(DraftReference) returns (DraftMutationResponse);
   rpc RebaseDraft(RebaseDraftRequest) returns (RebaseDraftResponse);
   rpc CancelDraft(DraftReference) returns (CancelDraftResponse);
   rpc PublishDraft(PublishDraftRequest) returns (PublishDraftResponse);
   rpc GetOutcome(TransactionRequest) returns (TransactionOutcome);
+  rpc GetResult(GetTransactionResultRequest) returns (GetTransactionResultResponse);
   rpc StreamOutcome(TransactionRequest) returns (stream TransactionOutcome);
 }
 service EvidenceService {

@@ -1,6 +1,8 @@
 # Chronolog DB Detailed Implementation Plan
 
-Status: Draft 0.1
+Status: Historical delivery plan. The completed SQL-first replacement is
+specified by
+[Specification 10](implementation-specs/10-deterministic-sql-transactions.md).
 
 Date: 2026-07-13
 
@@ -433,23 +435,24 @@ step, recursion, statement-count, and result-size limits.
 
 #### M4-PRECOND-1: Preconditions
 
-Implement ordered typed-IR assertion and expectation evaluation, canonical
-query-result modes, deterministic row-order proofs, result digests, and stable
-failure attribution.
+Implement ordered SQL assertion and expectation evaluation, canonical result
+modes, deterministic row-order checks, result digests, and stable failure
+attribution.
 
 #### M4-REDUCE-1: Atomic reducer
 
-Implement one top-level SQLite transaction per candidate, canonical IR
-compilation, typed binding, complete rollback, accepted/rejected outcomes, and
-protected insertion into `chronolog_transactions`. Invalid protocol inputs and
-operational failures never receive a canonical log row.
+Implement one top-level SQLite transaction per candidate, deterministic SQL
+compilation, canonical typed binding, complete rollback, accepted/rejected
+outcomes, and protected insertion into `chronolog_transactions`. Invalid
+protocol inputs and operational failures never receive a canonical log row.
 
-#### M4-SCHEMA-1: Schema manifest
+#### M4-SCHEMA-1: Streamed schema
 
-Create fresh databases from canonical schema IR, reserve the `chronolog_`
-main-database prefix, protect system tables from shadowing, prohibit attached
-companion databases, and pin the schema and execution-manifest digests. The
-current prototype database is recreated rather than migrated.
+Create fresh databases with an empty application schema, evolve it through
+replicated SQL DDL, reserve the `chronolog_` main-database prefix, protect
+system tables from shadowing, prohibit attached companion databases, and pin
+the execution-manifest digest. Development state is recreated rather than
+migrated.
 
 #### M4-CHECKPOINT-1: Checkpoint manager
 

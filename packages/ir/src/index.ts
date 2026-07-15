@@ -1,10 +1,32 @@
-export * from './builders.js'
-export * from './codec.js'
-export * from './fixtures.js'
+export {
+  IR_DECODE_LIMITS,
+  decodeExecutionManifest,
+  decodeLogicalValue,
+  decodeLogicalValues,
+  digestExecutionManifest,
+  encodeExecutionManifest,
+  encodeLogicalValue,
+  encodeLogicalValues,
+  logicalTypeFromCanonicalCbor,
+  logicalTypeToCanonicalCbor,
+  logicalValueFromCanonicalCbor,
+  logicalValueToCanonicalCbor,
+} from './codec.js'
 export * from './identifiers.js'
 export * from './json.js'
-export * from './tags.js'
 export { BUILTIN_FUNCTION_NAMES } from './types.js'
-export type * from './types.js'
-export * from './validation.js'
-export * from './visitors.js'
+export type {
+  CanonicalJsonValue,
+  CollationId,
+  ExecutionFeatures,
+  ExecutionManifest,
+  FunctionEffect,
+  LogicalType,
+  LogicalValue,
+  RegisteredCollation,
+  RegisteredFunction,
+  RegisteredModule,
+  SemanticResourceLimits,
+  ValueType,
+  VectorElementType,
+} from './types.js'

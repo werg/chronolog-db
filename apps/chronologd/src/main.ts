@@ -1,12 +1,10 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 
 import { createCoreExecutionManifest } from '@chronolog/compiler-sqlite'
 import { ControlStore, JsonFileControlStorePersistence } from '@chronolog/control-store'
-import { decodeSchemaManifest, encodeSchemaManifest, SchemaBuilder, type SchemaManifest } from '@chronolog/ir'
 import {
   DeterministicMaterializer,
-  createDoltLiteLegacyMaterializationRuntime,
+  createDoltLiteMaterializationRuntime,
   readNativeEngineInfo,
 } from '@chronolog/materializer-doltlite'
 import { ChronologNode, createEpochEnvelopeCipher, type MembershipResolver } from '@chronolog/node-core'
@@ -53,7 +51,6 @@ const membership = process.env.CHRONOLOG_STATIC_MEMBERSHIP_FILE === undefined
     })
 
 const configuredPeers: readonly SsbPeer[] = runtime.peers
-const schemaManifest = await loadSchemaManifest(dataDirectory)
 const nativeEngine = readNativeEngineInfo()
 const executionManifest = createCoreExecutionManifest({
   profile: 'chronolog-core-portable',
@@ -68,7 +65,6 @@ process.stdout.write(`${JSON.stringify({
   ssbId: transport.identity,
   ssbAddress: transport.address(runtime.ssbScope),
   materializer: materializer.backend,
-  schemaDigest: Buffer.from(materializer.schemaDigest).toString('base64url'),
   executionManifestDigest: Buffer.from(materializer.executionManifestDigest).toString('base64url'),
 })}\n`)
 
@@ -118,7 +114,6 @@ async function startRuntime() {
     materializer = await DeterministicMaterializer.open({
       path: join(dataDirectory, 'application.db'),
       checkpointEvery: runtime.checkpointEvery,
-      schemaManifest,
       executionManifest,
     })
     node = new ChronologNode({
@@ -128,7 +123,7 @@ async function startRuntime() {
       validationPolicy,
       identity,
       transport,
-      materialization: createDoltLiteLegacyMaterializationRuntime(materializer),
+      materialization: createDoltLiteMaterializationRuntime(materializer),
       controlStore: new ControlStore(new JsonFileControlStorePersistence(join(dataDirectory, 'control.json'))),
       membership,
       validator: {
@@ -158,22 +153,4 @@ async function startRuntime() {
     }
     throw error
   }
-}
-
-async function loadSchemaManifest(directory: string): Promise<SchemaManifest> {
-  const configured = process.env.CHRONOLOG_SCHEMA_FILE
-  const path = resolve(configured ?? join(directory, 'schema.cbor'))
-  try {
-    return decodeSchemaManifest(new Uint8Array(await readFile(path)))
-  } catch (error) {
-    if (configured !== undefined || !isMissing(error)) throw error
-    const schema = new SchemaBuilder().schema('application_default', [])
-    await mkdir(directory, { recursive: true, mode: 0o700 })
-    await writeFile(path, encodeSchemaManifest(schema), { flag: 'wx', mode: 0o600 })
-    return schema
-  }
-}
-
-function isMissing(error: unknown): boolean {
-  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT'
 }

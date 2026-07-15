@@ -151,8 +151,7 @@ function inputToCbor(input: ChronologExecutionRequest['inputs'][number]): CborVa
 function compatibilityToCbor(value: ChronologCompatibilityTuple): CborValue {
   return integerMap([
     [0, value.engineDigest],
-    [1, value.schemaDigest],
-    [2, value.executionManifestDigest],
+    [1, value.executionManifestDigest],
   ])
 }
 
@@ -212,7 +211,6 @@ function assertArtifacts(
 function assertCompatibility(expected: ChronologCompatibilityTuple, actual: ChronologCompatibilityTuple): void {
   if (
     !sameBytes(expected.engineDigest, actual.engineDigest) ||
-    !sameBytes(expected.schemaDigest, actual.schemaDigest) ||
     !sameBytes(expected.executionManifestDigest, actual.executionManifestDigest)
   ) substitution('CHRONOLOG_RESPONSE_COMPATIBILITY_MISMATCH')
 }
@@ -234,7 +232,6 @@ function substitution(code: string): never {
 function copyCompatibility(value: ChronologCompatibilityTuple): ChronologCompatibilityTuple {
   return {
     engineDigest: value.engineDigest.slice(),
-    schemaDigest: value.schemaDigest.slice(),
     executionManifestDigest: value.executionManifestDigest.slice(),
   }
 }

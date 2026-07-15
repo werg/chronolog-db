@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState, useSyncExternalStore, type DependencyList } from 'react'
 import {
   ChronologRpcError,
-  ClientSchemaMismatchError,
+  ClientManifestMismatchError,
   type ChronologClient,
+  type LocalSqlInput,
   type LiveQueryValue,
   type NodeStatus,
-  type Query,
   type QueryOptions,
   type ReplicationStatus,
   type SettlementEvidence,
@@ -59,13 +59,13 @@ function sameDependencies(previous: readonly unknown[], current: DependencyList)
   return previous.length === current.length && previous.every((value, index) => Object.is(value, current[index]))
 }
 
-export type ChronologQueryState<Row> =
-  | { readonly status: 'loading'; readonly previous?: LiveQueryValue<Row> }
-  | { readonly status: 'value'; readonly value: LiveQueryValue<Row> }
-  | { readonly status: 'reset'; readonly value: LiveQueryValue<Row>; readonly reason: string }
-  | { readonly status: 'transport_error'; readonly error: unknown; readonly previous?: LiveQueryValue<Row>; readonly retrying: boolean }
-  | { readonly status: 'query_error'; readonly error: unknown; readonly previous?: LiveQueryValue<Row> }
-  | { readonly status: 'schema_mismatch'; readonly error: ClientSchemaMismatchError; readonly previous?: LiveQueryValue<Row> }
+export type ChronologQueryState =
+  | { readonly status: 'loading'; readonly previous?: LiveQueryValue }
+  | { readonly status: 'value'; readonly value: LiveQueryValue }
+  | { readonly status: 'reset'; readonly value: LiveQueryValue; readonly reason: string }
+  | { readonly status: 'transport_error'; readonly error: unknown; readonly previous?: LiveQueryValue; readonly retrying: boolean }
+  | { readonly status: 'query_error'; readonly error: unknown; readonly previous?: LiveQueryValue }
+  | { readonly status: 'manifest_mismatch'; readonly error: ClientManifestMismatchError; readonly previous?: LiveQueryValue }
   | { readonly status: 'disabled' }
 
 export interface UseChronologQueryOptions extends Omit<QueryOptions, 'atRevision' | 'signal'> {
@@ -73,25 +73,21 @@ export interface UseChronologQueryOptions extends Omit<QueryOptions, 'atRevision
   readonly enabled?: boolean
 }
 
-export function useChronologQuery<
-  Row,
-  Mode extends 'scalar' | 'ordered' | 'multiset' | 'set',
-  Parameters = undefined,
->(
-  query: Query<Row, Mode, Parameters>,
-  parameters?: Parameters,
+export function useChronologQuery(
+  sql: string,
+  parameters: readonly LocalSqlInput[] = [],
   options: UseChronologQueryOptions = {},
-): ChronologQueryState<Row> {
+): ChronologQueryState {
   const client = useChronologClient(options.client)
-  const identity = client.queryResourceKey(query, parameters)
+  const identity = client.queryResourceKey(sql, parameters)
   const resource = useOwnedResource(
     () => options.enabled === false
       ? undefined
-      : client.liveQuery(query, parameters, {
-          ...(options.maxDisplayRows === undefined ? {} : { maxDisplayRows: options.maxDisplayRows }),
+      : client.liveQuery(sql, parameters, {
+          ...(options.maxRows === undefined ? {} : { maxRows: options.maxRows }),
         }),
     // Canonical query/parameter identity deliberately replaces JavaScript object identity.
-    [client, identity, options.maxDisplayRows, options.enabled],
+    [client, identity, options.maxRows, options.enabled],
   )
   const snapshot = useOptionalResource(resource)
   if (options.enabled === false) return { status: 'disabled' }
@@ -101,9 +97,9 @@ export function useChronologQuery<
       : { status: 'value', value: snapshot.value }
   }
   if (snapshot.status === 'error') {
-    if (snapshot.error instanceof ClientSchemaMismatchError) {
+    if (snapshot.error instanceof ClientManifestMismatchError) {
       return {
-        status: 'schema_mismatch',
+        status: 'manifest_mismatch',
         error: snapshot.error,
         ...(snapshot.value === undefined ? {} : { previous: snapshot.value }),
       }

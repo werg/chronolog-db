@@ -1,16 +1,13 @@
-# Chronolog Deterministic SQL Dialect and Relational IR
+# Archived Relational IR Dialect Reference
 
-Status: transitional implementation reference; superseded for protocol design
-by
+Status: historical implementation reference; superseded by
 [Specification 10](implementation-specs/10-deterministic-sql-transactions.md)
 
-This document describes the semantics of the current relational IR and SQLite
-renderer while the SQL-first cutover is implemented. It is not an alternative
-signed protocol. Where it describes canonical IR, schema manifests, global
-schema digests, special schema commands, or IR-only client/RPC surfaces as the
-target architecture, Specification 10 is authoritative. Parser/compiler
-compatibility work may continue through this private IR only when it moves the
-SQL frontend toward that cutover without expanding the public protocol.
+This document records the removed relational IR and renderer. It is not an
+alternative signed protocol or a description of the current implementation.
+Where it describes canonical IR, schema manifests, global schema digests,
+special schema commands, or IR-only client/RPC surfaces, Specification 10 is
+authoritative.
 
 This document specifies the current deterministic relational intermediate
 representation (IR), its execution semantics, and its mapping to DoltLite.
@@ -1435,30 +1432,13 @@ index uses a Chronolog-managed ordinary storage namespace and declares its
 logical mutations. Arbitrary direct page, file, or shadow-table access is not
 part of the portable ABI.
 
-## 26. Future schema changes
+## 26. Schema evolution in the replacement runtime
 
-The direct prototype implementation begins with one canonical genesis schema.
-It does not migrate the current raw-SQL prototype database or retain its
-transaction interpreter. Development databases are recreated.
-
-When ordered schema changes are implemented as a language feature, they are
-signed transactions requiring the schema-admin capability and declare:
-
-```text
-from schema digest
-to schema digest
-canonical schema delta IR
-deterministic data transformation IR
-extension/profile transition, if any
-```
-
-The reducer rejects a schema change unless the current schema digest exactly
-matches `from`. Application transactions pin the schema digest they target.
-
-Schema changes may add, alter, rebuild, or remove registered indexes and
-derived structures. Rebuild iteration uses primary-key order. Changes to the
-execution semantics of already signed programs are outside this initial
-implementation and MUST NOT be smuggled through a schema change.
+The SQL-first runtime starts with an empty application schema. Supported
+`CREATE`, `ALTER`, and `DROP` statements are ordinary signed transaction body
+statements and may be combined atomically with DML. Catalog expectations are
+ordinary SQL preconditions. No schema digest, schema delta language, migration
+runner, or special schema-change transaction remains.
 
 ## 27. Capabilities
 
@@ -1520,7 +1500,7 @@ Every profile release MUST publish canonical fixtures for:
 - vector encoding, distance, KNN ties, filters, rollback, and replay;
 - spatial behavior;
 - WASM ABI, traps, fuel, and forbidden imports;
-- future schema changes and extension/profile changes when enabled;
+- streamed SQL DDL and extension/profile changes when enabled;
 - crash recovery at every candidate and branch publication boundary; and
 - replay equivalence across supported OS and architecture targets.
 

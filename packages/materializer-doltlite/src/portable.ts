@@ -21,7 +21,6 @@ import type {
 export interface DoltLitePortableMaterializerLike {
   readonly revision: bigint
   readonly orderLength: number
-  readonly schemaDigest: Uint8Array
   readonly executionManifestDigest: Uint8Array
   readonly backend: MaterializerBackendInfo
   transactionLog(): readonly TransactionLogRow[]
@@ -116,9 +115,6 @@ function verifyEngineAndManifests(
 ): void {
   if (!sameBytes(materializer.backend.engineDigest, input.invocation.expectedEngineDigest)) {
     throw new MaterializerContractError('MATERIALIZER_ORACLE_ENGINE_DIGEST_MISMATCH')
-  }
-  if (!sameBytes(materializer.schemaDigest, input.invocation.expectedSchemaDigest)) {
-    throw new MaterializerContractError('MATERIALIZER_ORACLE_SCHEMA_DIGEST_MISMATCH')
   }
   if (!sameBytes(
     materializer.executionManifestDigest,

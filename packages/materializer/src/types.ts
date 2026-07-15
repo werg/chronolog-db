@@ -1,4 +1,4 @@
-import type { ExecutionManifest, SchemaManifest } from '@chronolog/ir'
+import type { ExecutionManifest } from '@chronolog/ir'
 import type { TransactionCore } from '@chronolog/protocol'
 
 export type ContentHashAlgorithm = 'sha2-256' | 'blake3-256' | 'dolt-blake3-160'
@@ -41,7 +41,6 @@ export interface ExactDatabaseRef {
 
 export type ChronologArtifactKind =
   | 'admitted-suffix'
-  | 'schema-manifest'
   | 'execution-manifest'
   | 'continuation'
   | 'materialization-manifest'
@@ -80,11 +79,9 @@ export interface ChronologMaterializationInvocation {
   readonly previous: MaterializationInput | null
   readonly replayBase: MaterializationInput
   readonly admittedSuffix: ExactArtifactRef
-  readonly schemaManifest: ExactArtifactRef
   readonly executionManifest: ExactArtifactRef
   readonly continuation: ExactArtifactRef | null
   readonly expectedEngineDigest: Uint8Array
-  readonly expectedSchemaDigest: Uint8Array
   readonly expectedExecutionManifestDigest: Uint8Array
   readonly expectedPreviousOrderDigest: Uint8Array
   readonly replayFromIndex: number
@@ -160,7 +157,6 @@ export type ChronologMaterializationOutcome =
 
 export interface ResolvedMaterializationInvocation {
   readonly invocation: ChronologMaterializationInvocation
-  readonly schemaManifest: SchemaManifest
   readonly executionManifest: ExecutionManifest
   readonly admittedSuffix: ChronologAdmittedSuffix
   readonly continuation: ChronologMaterializationContinuation | null

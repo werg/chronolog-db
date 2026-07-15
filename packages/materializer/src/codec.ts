@@ -20,11 +20,8 @@ import {
 } from '@chronolog/canonical'
 import {
   decodeExecutionManifest,
-  decodeSchemaManifest,
   encodeExecutionManifest,
-  encodeSchemaManifest,
   type ExecutionManifest,
-  type SchemaManifest,
 } from '@chronolog/ir'
 import {
   decodeTransactionCore,
@@ -65,7 +62,6 @@ const HASH_ALGORITHMS: readonly ContentHashAlgorithm[] = [
 ]
 const ARTIFACT_KINDS: readonly ChronologArtifactKind[] = [
   'admitted-suffix',
-  'schema-manifest',
   'execution-manifest',
   'continuation',
   'materialization-manifest',
@@ -270,7 +266,6 @@ export function encodeMaterializationInvocation(value: ChronologMaterializationI
   canonicalInvariant(value.context.logicalTimeMs === null, 'SCHEMA_INVALID', 'Pure materialization v1 forbids logical time')
   canonicalInvariant(value.context.entropySeed === null, 'SCHEMA_INVALID', 'Pure materialization v1 forbids caller entropy')
   canonicalInvariant(value.admittedSuffix.kind === 'admitted-suffix', 'SCHEMA_INVALID', 'Invocation admitted suffix has the wrong kind')
-  canonicalInvariant(value.schemaManifest.kind === 'schema-manifest', 'SCHEMA_INVALID', 'Invocation schema manifest has the wrong kind')
   canonicalInvariant(value.executionManifest.kind === 'execution-manifest', 'SCHEMA_INVALID', 'Invocation execution manifest has the wrong kind')
   canonicalInvariant(value.continuation === null || value.continuation.kind === 'continuation', 'SCHEMA_INVALID', 'Invocation continuation has the wrong kind')
   requireIndex(value.replayFromIndex, 'replayFromIndex')
@@ -283,16 +278,14 @@ export function encodeMaterializationInvocation(value: ChronologMaterializationI
     [3, value.previous === null ? null : inputToCbor(value.previous)],
     [4, inputToCbor(value.replayBase)],
     [5, exactArtifactRefToCbor(value.admittedSuffix)],
-    [6, exactArtifactRefToCbor(value.schemaManifest)],
-    [7, exactArtifactRefToCbor(value.executionManifest)],
-    [8, value.continuation === null ? null : exactArtifactRefToCbor(value.continuation)],
-    [9, requireDigest(value.expectedEngineDigest, 'expectedEngineDigest')],
-    [10, requireDigest(value.expectedSchemaDigest, 'expectedSchemaDigest')],
-    [11, requireDigest(value.expectedExecutionManifestDigest, 'expectedExecutionManifestDigest')],
-    [12, requireDigest(value.expectedPreviousOrderDigest, 'expectedPreviousOrderDigest')],
-    [13, BigInt(value.replayFromIndex)],
-    [14, BigInt(value.targetOrderLength)],
-    [15, requireDigest(value.targetOrderDigest, 'targetOrderDigest')],
+    [6, exactArtifactRefToCbor(value.executionManifest)],
+    [7, value.continuation === null ? null : exactArtifactRefToCbor(value.continuation)],
+    [8, requireDigest(value.expectedEngineDigest, 'expectedEngineDigest')],
+    [9, requireDigest(value.expectedExecutionManifestDigest, 'expectedExecutionManifestDigest')],
+    [10, requireDigest(value.expectedPreviousOrderDigest, 'expectedPreviousOrderDigest')],
+    [11, BigInt(value.replayFromIndex)],
+    [12, BigInt(value.targetOrderLength)],
+    [13, requireDigest(value.targetOrderDigest, 'targetOrderDigest')],
   ]))
 }
 
@@ -301,7 +294,7 @@ export function decodeMaterializationInvocation(
   limits: DecodeLimits = MATERIALIZER_DECODE_LIMITS,
 ): ChronologMaterializationInvocation {
   const map = root(bytes, 'materialization_invocation', limits)
-  assertKnownIntegerKeys(map, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], 'materialization_invocation')
+  assertKnownIntegerKeys(map, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13], 'materialization_invocation')
   canonicalInvariant(expectBigint(required(map, 0, 'materialization_invocation.version'), 'materialization_invocation.version') === 1n, 'SCHEMA_INVALID', 'Unsupported materialization invocation version')
   canonicalInvariant(expectBigint(required(map, 1, 'materialization_invocation.profile'), 'materialization_invocation.profile') === 1n, 'SCHEMA_INVALID', 'Materialization invocation must use pure profile')
   const context = expectMap(required(map, 2, 'materialization_invocation.context'), 'materialization_invocation.context')
@@ -311,17 +304,15 @@ export function decodeMaterializationInvocation(
   canonicalInvariant(logicalTimeMs === null, 'SCHEMA_INVALID', 'Pure materialization v1 forbids logical time')
   canonicalInvariant(entropySeed === null, 'SCHEMA_INVALID', 'Pure materialization v1 forbids caller entropy')
   const previousValue = required(map, 3, 'materialization_invocation.previous')
-  const continuationValue = required(map, 8, 'materialization_invocation.continuation')
+  const continuationValue = required(map, 7, 'materialization_invocation.continuation')
   const admittedSuffix = exactArtifactRefFromCbor(required(map, 5, 'materialization_invocation.admitted_suffix'), 'materialization_invocation.admitted_suffix')
-  const schemaManifest = exactArtifactRefFromCbor(required(map, 6, 'materialization_invocation.schema_manifest'), 'materialization_invocation.schema_manifest')
-  const executionManifest = exactArtifactRefFromCbor(required(map, 7, 'materialization_invocation.execution_manifest'), 'materialization_invocation.execution_manifest')
+  const executionManifest = exactArtifactRefFromCbor(required(map, 6, 'materialization_invocation.execution_manifest'), 'materialization_invocation.execution_manifest')
   const continuation = continuationValue === null ? null : exactArtifactRefFromCbor(continuationValue, 'materialization_invocation.continuation')
   canonicalInvariant(admittedSuffix.kind === 'admitted-suffix', 'SCHEMA_INVALID', 'Invocation admitted suffix has the wrong kind')
-  canonicalInvariant(schemaManifest.kind === 'schema-manifest', 'SCHEMA_INVALID', 'Invocation schema manifest has the wrong kind')
   canonicalInvariant(executionManifest.kind === 'execution-manifest', 'SCHEMA_INVALID', 'Invocation execution manifest has the wrong kind')
   canonicalInvariant(continuation === null || continuation.kind === 'continuation', 'SCHEMA_INVALID', 'Invocation continuation has the wrong kind')
-  const replayFromIndex = expectUint(required(map, 13, 'materialization_invocation.replay_from_index'), 'materialization_invocation.replay_from_index')
-  const targetOrderLength = expectUint(required(map, 14, 'materialization_invocation.target_order_length'), 'materialization_invocation.target_order_length')
+  const replayFromIndex = expectUint(required(map, 11, 'materialization_invocation.replay_from_index'), 'materialization_invocation.replay_from_index')
+  const targetOrderLength = expectUint(required(map, 12, 'materialization_invocation.target_order_length'), 'materialization_invocation.target_order_length')
   canonicalInvariant(replayFromIndex <= targetOrderLength, 'SCHEMA_INVALID', 'Replay index exceeds target order length')
   return {
     version: 1,
@@ -334,16 +325,14 @@ export function decodeMaterializationInvocation(
     previous: previousValue === null ? null : inputFromCbor(previousValue, 'materialization_invocation.previous'),
     replayBase: inputFromCbor(required(map, 4, 'materialization_invocation.replay_base'), 'materialization_invocation.replay_base'),
     admittedSuffix,
-    schemaManifest,
     executionManifest,
     continuation,
-    expectedEngineDigest: expectBytes(required(map, 9, 'materialization_invocation.expected_engine_digest'), 'materialization_invocation.expected_engine_digest', 32),
-    expectedSchemaDigest: expectBytes(required(map, 10, 'materialization_invocation.expected_schema_digest'), 'materialization_invocation.expected_schema_digest', 32),
-    expectedExecutionManifestDigest: expectBytes(required(map, 11, 'materialization_invocation.expected_execution_manifest_digest'), 'materialization_invocation.expected_execution_manifest_digest', 32),
-    expectedPreviousOrderDigest: expectBytes(required(map, 12, 'materialization_invocation.expected_previous_order_digest'), 'materialization_invocation.expected_previous_order_digest', 32),
+    expectedEngineDigest: expectBytes(required(map, 8, 'materialization_invocation.expected_engine_digest'), 'materialization_invocation.expected_engine_digest', 32),
+    expectedExecutionManifestDigest: expectBytes(required(map, 9, 'materialization_invocation.expected_execution_manifest_digest'), 'materialization_invocation.expected_execution_manifest_digest', 32),
+    expectedPreviousOrderDigest: expectBytes(required(map, 10, 'materialization_invocation.expected_previous_order_digest'), 'materialization_invocation.expected_previous_order_digest', 32),
     replayFromIndex,
     targetOrderLength,
-    targetOrderDigest: expectBytes(required(map, 15, 'materialization_invocation.target_order_digest'), 'materialization_invocation.target_order_digest', 32),
+    targetOrderDigest: expectBytes(required(map, 13, 'materialization_invocation.target_order_digest'), 'materialization_invocation.target_order_digest', 32),
   }
 }
 
@@ -588,14 +577,6 @@ export function decodeDifferentialFixture(
     canonicalInvariant(compareObjectRefs(objects[index - 1]!.ref, objects[index]!.ref) < 0, 'SCHEMA_INVALID', 'Differential fixture object refs are not strictly sorted')
   }
   return { version: 1, name, invocation, objects }
-}
-
-export function encodeSchemaManifestArtifact(value: SchemaManifest): Uint8Array {
-  return encodeSchemaManifest(value)
-}
-
-export function decodeSchemaManifestArtifact(bytes: Uint8Array): SchemaManifest {
-  return decodeSchemaManifest(bytes)
 }
 
 export function encodeExecutionManifestArtifact(value: ExecutionManifest): Uint8Array {

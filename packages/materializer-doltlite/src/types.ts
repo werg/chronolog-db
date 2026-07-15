@@ -1,13 +1,13 @@
 import type { TransactionCore, TransactionOrderKey } from '@chronolog/protocol'
 import type {
-  CanonicalQueryResult,
   ExecutionManifest,
-  IrDiagnostic,
-  Mutation,
-  Query,
-  SchemaManifest,
 } from '@chronolog/ir'
-import type { TransactionContextValues } from '@chronolog/compiler-sqlite'
+import type {
+  CanonicalSqlResult,
+  SqlResultMode,
+  SqlStatement,
+  TransactionResultEnvelopeV1,
+} from '@chronolog/protocol'
 
 export interface AdmittedTransaction {
   readonly txId: Uint8Array
@@ -29,9 +29,12 @@ export interface TransactionOutcome {
   readonly outcome: TransactionOutcomeKind
   readonly rejectionCode: string | null
   readonly failingPreconditionId: number | null
-  readonly failingCommandId: number | null
-  readonly failingRuleId: number | null
+  readonly failingPreconditionIndex: number | null
+  readonly failingStatementIndex: number | null
+  readonly failurePhase: 'precondition' | 'statement' | 'finalize' | null
   readonly failingConstraintId: number | null
+  readonly resultEnvelopeVersion: 1 | null
+  readonly resultEnvelope: Uint8Array | null
   readonly resultDigest: Uint8Array | null
 }
 
@@ -59,7 +62,6 @@ export interface MaterializedRevision {
   readonly replayedTransactions: number
   readonly checkpointPrefix: number
   readonly contentHash: string
-  readonly schemaDigest: Uint8Array
   readonly manifestDigest: Uint8Array
   readonly earliestChangedOrderIndex: number
   readonly outcomeChanges: readonly OutcomeChange[]
@@ -132,12 +134,12 @@ export interface DoltBranchInfoLike {
   readonly hash: string
 }
 
-export interface MaterializedIrQueryResult {
+export interface MaterializedSqlQueryResult {
   readonly revision: bigint
   readonly orderLength: number
-  readonly schemaDigest: Uint8Array
   readonly executionManifestDigest: Uint8Array
-  readonly result: CanonicalQueryResult
+  readonly statement: SqlStatement
+  readonly result: CanonicalSqlResult
   readonly resultDigest: Uint8Array
 }
 
@@ -155,36 +157,29 @@ export interface LocalSqlQueryResult {
   readonly rows: readonly (readonly LocalSqlValue[])[]
 }
 
-export interface QueryExecutionContext extends Partial<TransactionContextValues> {
-  readonly groupId?: Uint8Array
-  readonly membershipRevision?: Uint8Array
-  readonly validationPolicy?: Uint8Array
-  readonly authorId?: Uint8Array
-  readonly authorTimestampMs?: bigint
-  readonly transactionNonce?: Uint8Array
-  readonly candidateDigest?: Uint8Array
-  readonly transactionId?: Uint8Array
-  readonly authorFeedSequence?: bigint
-}
-
-export interface QueryIrOptions {
+export interface ObserveSqlOptions {
   readonly atRevision?: bigint
-  readonly context?: QueryExecutionContext
+  readonly resultMode: SqlResultMode
 }
 
 export interface LocalSqlOptions {
   readonly atRevision?: bigint
 }
 
-export interface MaterializerIrBackend {
+export interface MaterializerSqlBackend {
   readonly revision: bigint
   readonly orderLength: number
-  readonly schemaDigest: Uint8Array
   readonly executionManifestDigest: Uint8Array
-  query(query: Query, options?: QueryIrOptions): Promise<MaterializedIrQueryResult>
+  observe(statement: SqlStatement, options: ObserveSqlOptions): Promise<MaterializedSqlQueryResult>
   localQuery(sql: string, parameters?: readonly LocalSqlValue[], options?: LocalSqlOptions): LocalSqlQueryResult
-  validateQuery(query: Query): readonly IrDiagnostic[]
-  validateMutation(mutation: Mutation): readonly IrDiagnostic[]
+  validateStatement(statement: SqlStatement, mode: 'precondition' | 'body'): readonly SqlDiagnostic[]
+  transactionResult(txId: Uint8Array): TransactionResultEnvelopeV1 | null
+}
+
+export interface SqlDiagnostic {
+  readonly code: string
+  readonly startByte?: number
+  readonly endByte?: number
 }
 
 export interface StatementLike {
@@ -234,7 +229,6 @@ export interface DatabaseLike {
 
 export interface MaterializerOptions {
   readonly path?: string
-  readonly schemaManifest: SchemaManifest
   readonly executionManifest: ExecutionManifest
   readonly checkpointEvery?: number
   readonly retainCheckpoints?: number
@@ -243,8 +237,6 @@ export interface MaterializerOptions {
 export interface StoredExecutionManifest {
   readonly manifestDigest: Uint8Array
   readonly canonicalManifest: Uint8Array
-  readonly schemaDigest: Uint8Array
-  readonly canonicalSchema: Uint8Array
 }
 
 export type RevisionSubscriber = (revision: MaterializedRevision) => void

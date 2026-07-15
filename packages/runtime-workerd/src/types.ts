@@ -17,7 +17,6 @@ export type ChronologArtifactSelector =
 
 export interface ChronologCompatibilityTuple {
   readonly engineDigest: Uint8Array
-  readonly schemaDigest: Uint8Array
   readonly executionManifestDigest: Uint8Array
 }
 

@@ -17,7 +17,8 @@ The core behavior is implemented end to end:
   envelopes.
 - Durable SSB-DB2 feeds plus authenticated, explicitly allow-listed EBT peer
   replication.
-- Mandatory typed-IR `assert` and exact-result `expect` preconditions.
+- Direct signed SQL transaction programs with mandatory `assert` or exact-result
+  `expect` preconditions.
 - A replay-visible, reducer-protected `chronolog_transactions` log containing
   accepted and rejected transactions.
 - Checkpointed suffix replay when an older transaction arrives, including
@@ -25,11 +26,11 @@ The core behavior is implemented end to end:
 - A long-running daemon, HTTP/NDJSON streaming RPC, TypeScript client, React
   hooks, and CLI.
 
-The protocol and architecture are described in [the design](docs/design.md),
-[deterministic SQL dialect and relational IR specification](docs/sql-dialect.md),
-[implementation design](docs/implementation-design.md), and
-[implementation plan](docs/implementation-plan.md). The direct implementation
-of the deterministic runtime is specified subsystem by subsystem in the
+The protocol background is described in [the design](docs/design.md). The
+current deterministic transaction architecture is specified in
+[deterministic SQL transactions](docs/implementation-specs/10-deterministic-sql-transactions.md),
+[transaction results and ordered mutations](docs/implementation-specs/11-transaction-results-and-ordered-mutations.md),
+and the rest of the
 [implementation specification suite](docs/implementation-specs/README.md).
 The exact working/gated feature boundary is tracked in
 [implementation status](docs/implementation-status.md). Container fault and
@@ -62,43 +63,37 @@ Start a persistent standalone node:
 pnpm dev
 ```
 
-The daemon creates `.chronolog/config.json` and `.chronolog/schema.cbor` with
-mode `0600`, opens a durable SSB feed and application/control stores, enables
-encrypted envelopes, starts a single-root writer/validator bootstrap policy,
-and listens on
+The daemon creates `.chronolog/config.json` with mode `0600`, opens a durable
+SSB feed and application/control stores, enables encrypted envelopes, starts a
+single-root writer/validator bootstrap policy, and listens on
 `http://127.0.0.1:8787`. Its ready event prints the group ID, SSB feed ID, and
-SSB address. The default schema manifest is empty; applications normally
-generate canonical `schema.cbor` with `SchemaBuilder` from `@chronolog/ir`, or
-point `CHRONOLOG_SCHEMA_FILE` at one before the database is first opened.
+SSB address. Application schemas are created and evolved by deterministic SQL
+DDL in ordinary replicated transactions.
 
 In another terminal:
 
 ```sh
 pnpm cli status
-pnpm cli query @query.cbor '[]' '[]'
+pnpm cli query 'SELECT * FROM accounts WHERE id = ?' '[{"$int64":"1"}]'
 pnpm cli transact @transaction.json
-pnpm cli local-sql 'SELECT * FROM chronolog_transactions'
-pnpm cli schema-generate @schema.cbor schema.generated.ts --execution-digest BASE64URL_DIGEST
+pnpm cli outcome TRANSACTION_ID
+pnpm cli result TRANSACTION_ID
 ```
 
-`query` takes canonical query IR bytes (or unpadded base64url), parameter names,
-and exact logical parameters. A transaction file contains canonical assertion,
-observation, and mutation IR. Observations become exact-result preconditions by
-default. `local-sql` is intentionally separate and every result is marked
-`consensusSafe: false`; raw SQL cannot enter a replicated transaction.
+`query` executes a local read-only SQL statement with an optional JSON array of
+bindings. Transaction files contain `assertions`, `observations`, and a required
+`statements` array; each entry has `sql`, optional `bindings`, and an optional
+application `label`. Observations become exact-result preconditions unless
+`expect` is explicitly false. JSON bindings use ordinary JSON scalars plus
+`{"$int64":"..."}` and `{"$blob":"BASE64URL"}` for exact integers and blobs.
 
-Application read code does not need a Chronolog-specific SQL DSL. The generated
-schema module includes plain row interfaces plus a `ChronologSqlReadDatabase`
-table-to-row map suitable as the database type for external TypeScript SQL
-builders configured with a SQLite dialect. `client.queryLocalSql()` accepts
-their usual structural compiled-query shape (`{ sql, parameters }`) directly.
-This is the broad, read-only SQLite surface. For consensus reads and commands,
-`@chronolog/sql-frontend` accepts that same structural output, parses its
-tested SQLite subset locally, and validates the resulting IR with the selected
-schema, execution manifest, and real compiler. Canonical IR is internal signed
-wire bytecode, not a required application DSL. SQL text still never enters a
-replicated transaction, and draft publication still requires an explicit
-precondition. See [the frontend support matrix](packages/sql-frontend/README.md).
+The TypeScript client accepts conventional compiled-query structures
+(`{ sql, parameters }`) directly. Local reads use `client.query()`. Replicated
+transactions use `tx.observe()`, `tx.expect()`, `tx.assert()`, and `tx.exec()`;
+publication requires at least one precondition and an effect-capable body. SQL
+text and canonical bindings are the signed transaction bytecode. The pinned
+compiler parses every statement, validates the deterministic subset, and the
+materializer executes the same bytes under a restrictive SQLite authorizer.
 
 The CLI also supports `outcome`, `evidence`, `watermark`, and `replication`.
 Set `CHRONOLOG_URL`, `CHRONOLOG_GROUP_ID`, and `CHRONOLOG_TOKEN` when connecting
@@ -199,16 +194,15 @@ static snapshots and epoch configuration to all participants and restart them.
 | Package | Responsibility |
 | --- | --- |
 | `canonical` | Strict bounded CBOR, UTF-8, bytes, typed hash domains |
-| `ir` | Relational AST, schema/execution manifests, codecs, validation, builders |
-| `compiler-sqlite` | Catalog-aware IR lowering and deterministic engine manifests |
-| `sql-frontend` | Standard compiled SQLite SQL to compiler-validated canonical IR adapter |
+| `ir` | Canonical logical-value and execution-manifest codecs |
+| `compiler-sqlite` | Deterministic SQL parsing, validation, and engine manifests |
 | `protocol` | Signed transaction/attestation messages and immutable order keys |
 | `capabilities` | Genesis, grants, revocations, policies, recovery |
 | `crypto` | HPKE, signed epochs, content encryption, key-store interfaces |
 | `transport-ssb` | Durable SSB-DB2 feeds, EBT networking, deterministic simulator |
 | `control-store` | Rebuildable candidates, attestations, order, heartbeats, evidence |
 | `materializer` | Portable exact-ref contracts, coordinator/query/publication interfaces, and differential fixtures |
-| `materializer-doltlite` | IR execution, exact log, Dolt checkpoints, suffix replay, and legacy runtime adapter |
+| `materializer-doltlite` | Profiled SQL execution, exact result/log storage, Dolt checkpoints, and suffix replay |
 | `runtime-workerd` | Named immutable-input controller, deterministic run/follow coordinator, differential adapter, and test-only real DoltLite replay fixture |
 | `node-core` | Ingestion, validation, admission, encryption, orchestration |
 | `rpc` | Local service contract, in-process and HTTP transports |

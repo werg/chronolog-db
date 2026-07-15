@@ -1,17 +1,12 @@
 import {
   digestExecutionManifest,
-  digestSchemaManifest,
   encodeExecutionManifest,
-  encodeSchemaManifest,
   type ExecutionManifest,
-  type SchemaManifest,
 } from '@chronolog/ir'
 
-import { CompilerError } from './types.js'
+import { SqlCompilerError } from './sql-compiler.js'
 
 export interface ManifestArtifacts {
-  readonly schemaDigest: Uint8Array
-  readonly canonicalSchema: Uint8Array
   readonly executionManifestDigest: Uint8Array
   readonly canonicalExecutionManifest: Uint8Array
 }
@@ -66,21 +61,15 @@ export function createCoreExecutionManifest(
 }
 
 export async function compileManifestArtifacts(
-  schema: SchemaManifest,
   executionManifest: ExecutionManifest,
 ): Promise<ManifestArtifacts> {
   assertDigest(executionManifest.engineDigest, 'EXECUTION_ENGINE_DIGEST_INVALID')
-  const canonicalSchema = encodeSchemaManifest(schema)
   const canonicalExecutionManifest = encodeExecutionManifest(executionManifest)
-  const [schemaDigest, executionManifestDigest] = await Promise.all([
-    digestSchemaManifest(schema),
-    digestExecutionManifest(executionManifest),
-  ])
-  assertDigest(schemaDigest, 'SCHEMA_DIGEST_INVALID')
+  const executionManifestDigest = await digestExecutionManifest(executionManifest)
   assertDigest(executionManifestDigest, 'EXECUTION_MANIFEST_DIGEST_INVALID')
-  return { schemaDigest, canonicalSchema, executionManifestDigest, canonicalExecutionManifest }
+  return { executionManifestDigest, canonicalExecutionManifest }
 }
 
 function assertDigest(value: Uint8Array, code: string): void {
-  if (value.length !== 32) throw new CompilerError(code)
+  if (value.length !== 32) throw new SqlCompilerError(code)
 }

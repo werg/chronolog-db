@@ -162,6 +162,9 @@ importers:
       '@chronolog/ir':
         specifier: workspace:*
         version: link:../ir
+      '@chronolog/protocol':
+        specifier: workspace:*
+        version: link:../protocol
       '@chronolog/rpc':
         specifier: workspace:*
         version: link:../rpc
@@ -171,9 +174,12 @@ importers:
       '@chronolog/ir':
         specifier: workspace:*
         version: link:../ir
-      '@chronolog/kernels':
+      '@chronolog/protocol':
         specifier: workspace:*
-        version: link:../kernels
+        version: link:../protocol
+      sqlite3-parser:
+        specifier: 0.7.1
+        version: 0.7.1
 
   packages/control-store:
     dependencies:
@@ -236,15 +242,15 @@ importers:
       '@chronolog/capabilities':
         specifier: workspace:*
         version: link:../capabilities
+      '@chronolog/compiler-sqlite':
+        specifier: workspace:*
+        version: link:../compiler-sqlite
       '@chronolog/control-store':
         specifier: workspace:*
         version: link:../control-store
       '@chronolog/crypto':
         specifier: workspace:*
         version: link:../crypto
-      '@chronolog/ir':
-        specifier: workspace:*
-        version: link:../ir
       '@chronolog/materializer':
         specifier: workspace:*
         version: link:../materializer
@@ -255,9 +261,6 @@ importers:
         specifier: workspace:*
         version: link:../transport-ssb
     devDependencies:
-      '@chronolog/compiler-sqlite':
-        specifier: workspace:*
-        version: link:../compiler-sqlite
       '@chronolog/materializer-doltlite':
         specifier: workspace:*
         version: link:../materializer-doltlite
@@ -323,25 +326,6 @@ importers:
       '@chronolog/protocol':
         specifier: workspace:*
         version: link:../protocol
-
-  packages/sql-frontend:
-    dependencies:
-      '@chronolog/client':
-        specifier: workspace:*
-        version: link:../client
-      '@chronolog/compiler-sqlite':
-        specifier: workspace:*
-        version: link:../compiler-sqlite
-      '@chronolog/ir':
-        specifier: workspace:*
-        version: link:../ir
-      sqlite3-parser:
-        specifier: 0.7.1
-        version: 0.7.1
-    devDependencies:
-      '@dolthub/doltlite':
-        specifier: 0.11.29
-        version: 0.11.29(patch_hash=b8b12ba33968f3e1d16602d663535fa7db735a63d12677d1d7352e8a755a94e9)
 
   packages/testkit:
     dependencies:

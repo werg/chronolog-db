@@ -1,7 +1,7 @@
-export type { TransactionProgram } from '@chronolog/ir'
 export * from './bytes.js'
 export * from './cbor.js'
 export * from './errors.js'
 export * from './messages.js'
 export * from './primitives.js'
 export * from './schema.js'
+export * from './sql.js'

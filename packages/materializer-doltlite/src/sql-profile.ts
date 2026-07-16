@@ -383,7 +383,11 @@ function createAuthorizer(mode: SqlAuthorizationMode) {
       action === ACTION.DROP_TABLE || action === ACTION.DROP_INDEX ||
       action === ACTION.DROP_VIEW || action === ACTION.DROP_TRIGGER
     )) {
-      const allowed = database === 'main' && (mode === 'internal_bootstrap' || !isReservedSchemaObjectName(objectName))
+      const implicitAutoIndex = action === ACTION.CREATE_INDEX && objectName.startsWith('sqlite_autoindex_') &&
+        secondaryName !== '' && !isReservedSchemaObjectName(secondaryName)
+      const allowed = database === 'main' && (
+        mode === 'internal_bootstrap' || !isReservedSchemaObjectName(objectName) || implicitAutoIndex
+      )
       if (allowed) {
         schemaOperation = true
         if (action === ACTION.CREATE_INDEX) schemaIndexOperation = true

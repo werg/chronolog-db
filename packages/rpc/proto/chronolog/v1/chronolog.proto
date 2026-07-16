@@ -61,7 +61,8 @@ message PublishDraftResponse { string transaction_id = 1; bytes candidate_digest
 
 message TransactionRequest { string group_id = 1; string transaction_id = 2; string request_id = 3; optional uint64 resume_after_event_set_revision = 4; }
 message AcceptedResultReference { uint32 envelope_version = 1; bytes digest = 2; uint64 byte_length = 3; }
-message RejectionAttribution { string phase = 1; string code = 2; optional uint32 precondition_id = 3; optional uint32 precondition_index = 4; optional uint32 statement_index = 5; optional uint32 constraint_id = 6; optional string application_label = 7; }
+message CanonicalSchemaIdentity { string database = 1; string object_kind = 2; bytes object_name_utf8 = 3; optional bytes containing_object_name_utf8 = 4; }
+message RejectionAttribution { string phase = 1; string code = 2; optional uint32 precondition_id = 3; optional uint32 precondition_index = 4; optional uint32 statement_index = 5; optional CanonicalSchemaIdentity constraint_identity = 6; optional CanonicalSchemaIdentity trigger_identity = 7; optional string application_label = 8; }
 message TransactionOutcome { string transaction_id = 1; string phase = 2; string outcome_type = 3; optional AcceptedResultReference accepted_result = 4; optional RejectionAttribution rejection = 5; uint64 event_set_revision = 6; uint64 materialized_revision = 7; optional string order_key = 8; bool changed_by_replay = 9; bool admissible = 10; string observed_at = 11; }
 message GetTransactionResultRequest { string group_id = 1; string transaction_id = 2; string request_id = 3; optional uint64 at_materialized_revision = 4; }
 message GetTransactionResultResponse { Revision revision = 1; string transaction_id = 2; AcceptedResultReference reference = 3; bytes canonical_envelope = 4; }

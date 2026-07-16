@@ -86,6 +86,12 @@ export type CanonicalSqlValue =
   | { readonly kind: 'text'; readonly utf8: Uint8Array }
   | { readonly kind: 'blob'; readonly bytes: Uint8Array }
   | { readonly kind: 'logical'; readonly value: LogicalValue }
+  | {
+      readonly kind: 'registered'
+      readonly typeId: number
+      readonly implementationDigest: Uint8Array
+      readonly canonicalPayload: Uint8Array
+    }
 
 export interface CanonicalSqlResult {
   readonly mode: SqlResultMode
@@ -121,10 +127,32 @@ export interface TransactionResultEnvelopeV1 {
   readonly statements: readonly AcceptedStatementResult[]
 }
 
+export type CanonicalSchemaObjectKind = 'table' | 'index' | 'view' | 'trigger' | 'constraint'
+
+export interface CanonicalSchemaIdentity {
+  readonly database: 'main'
+  readonly objectKind: CanonicalSchemaObjectKind
+  readonly objectNameUtf8: Uint8Array
+  readonly containingObjectNameUtf8: Uint8Array | null
+}
+
+export interface SqlRejectionAttribution {
+  readonly phase: 'precondition' | 'statement' | 'finalize'
+  readonly code: string
+  readonly preconditionId: number | null
+  readonly preconditionIndex: number | null
+  readonly statementIndex: number | null
+  readonly constraintIdentity: CanonicalSchemaIdentity | null
+  readonly triggerIdentity: CanonicalSchemaIdentity | null
+}
+
 const RESULT_MODES: readonly SqlResultMode[] = ['scalar', 'ordered', 'multiset', 'set']
 const STORAGE_TYPES: readonly CanonicalSqlStorageType[] = ['integer', 'real', 'text', 'blob']
 const STATEMENT_CLASSES: readonly SqlStatementClass[] = [
   'read', 'insert', 'update', 'delete', 'schema', 'pragma', 'registered_effect',
+]
+const SCHEMA_OBJECT_KINDS: readonly CanonicalSchemaObjectKind[] = [
+  'table', 'index', 'view', 'trigger', 'constraint',
 ]
 
 function safeIndex(value: number, name: string): number {
@@ -351,19 +379,25 @@ export function canonicalSqlValueToCbor(value: CanonicalSqlValue): CborValue {
     case 'integer':
       protocolInvariant(value.value >= -(1n << 63n) && value.value <= (1n << 63n) - 1n, 'INTEGER_OUT_OF_RANGE', 'SQL integer is outside int64')
       return [1n, value.value]
-    case 'real': return [2n, expectEightBytes(value.bits, 'SQL real bits')]
+    case 'real': return [2n, finiteRealBits(value.bits, 'SQL real bits')]
     case 'text': {
       try { new TextDecoder('utf-8', { fatal: true }).decode(value.utf8) } catch { protocolInvariant(false, 'SCHEMA_INVALID', 'SQL text is invalid UTF-8') }
       return [3n, value.utf8]
     }
     case 'blob': return [4n, value.bytes]
     case 'logical': return [5n, logicalValueToCanonicalCbor(value.value)]
+    case 'registered': return [
+      6n,
+      BigInt(safeIndex(value.typeId, 'SQL registered value type ID')),
+      requireDigest(value.implementationDigest, 'SQL registered value implementation digest'),
+      value.canonicalPayload,
+    ]
   }
 }
 
 export function canonicalSqlValueFromCbor(value: CborValue, name = 'sql_value'): CanonicalSqlValue {
   const tuple = expectArray(value, name)
-  protocolInvariant(tuple.length >= 1 && tuple.length <= 2, 'SCHEMA_INVALID', `${name} has invalid arity`)
+  protocolInvariant(tuple.length >= 1 && tuple.length <= 4, 'SCHEMA_INVALID', `${name} has invalid arity`)
   const kind = expectUint64(tuple[0] ?? null, `${name}.kind`)
   if (kind === 0n && tuple.length === 1) return { kind: 'null' }
   if (kind === 1n && tuple.length === 2) {
@@ -371,7 +405,7 @@ export function canonicalSqlValueFromCbor(value: CborValue, name = 'sql_value'):
     protocolInvariant(integer >= -(1n << 63n) && integer <= (1n << 63n) - 1n, 'INTEGER_OUT_OF_RANGE', `${name}.integer is outside int64`)
     return { kind: 'integer', value: integer }
   }
-  if (kind === 2n && tuple.length === 2) return { kind: 'real', bits: expectBytes(tuple[1] ?? null, `${name}.real`, 8) }
+  if (kind === 2n && tuple.length === 2) return { kind: 'real', bits: finiteRealBits(expectBytes(tuple[1] ?? null, `${name}.real`, 8), `${name}.real`) }
   if (kind === 3n && tuple.length === 2) {
     const text = expectBytes(tuple[1] ?? null, `${name}.text`)
     try { new TextDecoder('utf-8', { fatal: true }).decode(text) } catch { protocolInvariant(false, 'SCHEMA_INVALID', `${name}.text is invalid UTF-8`) }
@@ -379,6 +413,12 @@ export function canonicalSqlValueFromCbor(value: CborValue, name = 'sql_value'):
   }
   if (kind === 4n && tuple.length === 2) return { kind: 'blob', bytes: expectBytes(tuple[1] ?? null, `${name}.blob`) }
   if (kind === 5n && tuple.length === 2) return { kind: 'logical', value: logicalValueFromCanonicalCbor(tuple[1] ?? null) }
+  if (kind === 6n && tuple.length === 4) return {
+    kind: 'registered',
+    typeId: safeIndex(Number(expectUint64(tuple[1] ?? null, `${name}.type_id`)), `${name}.type_id`),
+    implementationDigest: expectBytes(tuple[2] ?? null, `${name}.implementation_digest`, 32),
+    canonicalPayload: expectBytes(tuple[3] ?? null, `${name}.canonical_payload`),
+  }
   protocolInvariant(false, 'SCHEMA_INVALID', `${name} is invalid`)
 }
 
@@ -394,7 +434,10 @@ export function canonicalizeSqlResult(value: CanonicalSqlResult): CanonicalSqlRe
   protocolInvariant(RESULT_MODES.includes(value.mode), 'SCHEMA_INVALID', 'Unknown SQL result mode')
   for (const [rowIndex, row] of value.rows.entries()) {
     protocolInvariant(row.length === value.columns.length, 'SCHEMA_INVALID', `SQL result row ${rowIndex} has the wrong width`)
-    for (const item of row) canonicalSqlValueToCbor(item)
+    for (const [columnIndex, item] of row.entries()) {
+      canonicalSqlValueToCbor(item)
+      assertValueMatchesColumn(value.columns[columnIndex]!, item, rowIndex, columnIndex)
+    }
   }
   if (value.mode === 'scalar') {
     protocolInvariant(value.columns.length === 1 && value.rows.length <= 1, 'SCHEMA_INVALID', 'Scalar SQL result has invalid shape')
@@ -475,6 +518,7 @@ export function transactionResultEnvelopeToCanonicalCbor(value: TransactionResul
     if (entry.affectedRows !== null) {
       protocolInvariant(entry.affectedRows >= 0n && entry.affectedRows <= (1n << 63n) - 1n, 'INTEGER_OUT_OF_RANGE', 'Affected row count is outside nonnegative int64')
     }
+    assertStatementResultShape(entry)
     return [
       BigInt(index),
       BigInt(statementClass),
@@ -506,12 +550,14 @@ export function transactionResultEnvelopeFromCanonicalCbor(value: CborValue): Tr
     const affectedRows = affectedValue === null ? null : expectBigint(affectedValue ?? null, 'statement_result.affected_rows')
     if (affectedRows !== null) protocolInvariant(affectedRows >= 0n && affectedRows <= (1n << 63n) - 1n, 'INTEGER_OUT_OF_RANGE', 'Affected row count is outside nonnegative int64')
     const result = fields[3]
-    return {
+    const decoded = {
       index,
       statementClass,
       affectedRows,
       result: result === null ? null : canonicalSqlResultFromCbor(result ?? null),
     }
+    assertStatementResultShape(decoded)
+    return decoded
   })
   return { version: 1, preconditions, statements }
 }
@@ -527,6 +573,80 @@ export function decodeTransactionResultEnvelope(bytes: Uint8Array): TransactionR
 export async function digestTransactionResultEnvelope(value: TransactionResultEnvelopeV1 | Uint8Array): Promise<Uint8Array> {
   const bytes = value instanceof Uint8Array ? value : encodeTransactionResultEnvelope(value)
   return sha256(concatBytes(utf8('chronolog-transaction-result-envelope-v1'), Uint8Array.of(0), bytes))
+}
+
+export function canonicalSchemaIdentityToCbor(value: CanonicalSchemaIdentity): CborValue {
+  protocolInvariant(value.database === 'main', 'SCHEMA_INVALID', 'Only main schema identities are supported')
+  const kind = SCHEMA_OBJECT_KINDS.indexOf(value.objectKind)
+  protocolInvariant(kind >= 0, 'SCHEMA_INVALID', 'Unknown schema object kind')
+  assertNonemptyUtf8(value.objectNameUtf8, 'schema identity object name')
+  if (value.containingObjectNameUtf8 !== null) {
+    assertNonemptyUtf8(value.containingObjectNameUtf8, 'schema identity containing object name')
+  }
+  return [0n, BigInt(kind), value.objectNameUtf8, value.containingObjectNameUtf8]
+}
+
+export function canonicalSchemaIdentityFromCbor(value: CborValue, name = 'schema_identity'): CanonicalSchemaIdentity {
+  const tuple = expectArray(value, name)
+  protocolInvariant(tuple.length === 4 && tuple[0] === 0n, 'SCHEMA_INVALID', `${name} has invalid shape`)
+  const objectKind = SCHEMA_OBJECT_KINDS[Number(expectUint64(tuple[1] ?? null, `${name}.object_kind`))]
+  protocolInvariant(objectKind !== undefined, 'SCHEMA_INVALID', `${name}.object_kind is unknown`)
+  const objectNameUtf8 = expectBytes(tuple[2] ?? null, `${name}.object_name`)
+  assertNonemptyUtf8(objectNameUtf8, `${name}.object_name`)
+  const containing = tuple[3]
+  const containingObjectNameUtf8 = containing === null ? null : expectBytes(containing ?? null, `${name}.containing_object_name`)
+  if (containingObjectNameUtf8 !== null) assertNonemptyUtf8(containingObjectNameUtf8, `${name}.containing_object_name`)
+  return { database: 'main', objectKind, objectNameUtf8, containingObjectNameUtf8 }
+}
+
+export function encodeCanonicalSchemaIdentity(value: CanonicalSchemaIdentity): Uint8Array {
+  return encodeCanonicalCbor(canonicalSchemaIdentityToCbor(value))
+}
+
+export function decodeCanonicalSchemaIdentity(bytes: Uint8Array): CanonicalSchemaIdentity {
+  return canonicalSchemaIdentityFromCbor(assertCanonicalCbor(bytes))
+}
+
+export function sqlRejectionAttributionToCbor(value: SqlRejectionAttribution): CborValue {
+  const phase = ['precondition', 'statement', 'finalize'].indexOf(value.phase)
+  protocolInvariant(phase >= 0, 'SCHEMA_INVALID', 'Unknown SQL rejection phase')
+  protocolInvariant(/^[A-Z][A-Z0-9_]*$/u.test(value.code), 'SCHEMA_INVALID', 'SQL rejection code is not stable canonical text')
+  assertAttributionShape(value)
+  return [
+    BigInt(phase), value.code, nullableIndex(value.preconditionId, 'precondition ID'),
+    nullableIndex(value.preconditionIndex, 'precondition index'), nullableIndex(value.statementIndex, 'statement index'),
+    value.constraintIdentity === null ? null : canonicalSchemaIdentityToCbor(value.constraintIdentity),
+    value.triggerIdentity === null ? null : canonicalSchemaIdentityToCbor(value.triggerIdentity),
+  ]
+}
+
+export function sqlRejectionAttributionFromCbor(value: CborValue): SqlRejectionAttribution {
+  const tuple = expectArray(value, 'sql_rejection_attribution')
+  protocolInvariant(tuple.length === 7, 'SCHEMA_INVALID', 'SQL rejection attribution has invalid arity')
+  const phase = (['precondition', 'statement', 'finalize'] as const)[Number(expectUint64(tuple[0] ?? null, 'sql_rejection_attribution.phase'))]
+  protocolInvariant(phase !== undefined, 'SCHEMA_INVALID', 'SQL rejection attribution phase is unknown')
+  const code = expectString(tuple[1] ?? null, 'sql_rejection_attribution.code')
+  protocolInvariant(/^[A-Z][A-Z0-9_]*$/u.test(code), 'SCHEMA_INVALID', 'SQL rejection code is not stable canonical text')
+  const constraintIdentity = tuple[5] === null ? null : canonicalSchemaIdentityFromCbor(tuple[5] ?? null, 'sql_rejection_attribution.constraint_identity')
+  const triggerIdentity = tuple[6] === null ? null : canonicalSchemaIdentityFromCbor(tuple[6] ?? null, 'sql_rejection_attribution.trigger_identity')
+  const decoded: SqlRejectionAttribution = {
+    phase, code,
+    preconditionId: nullableCborIndex(tuple[2], 'sql_rejection_attribution.precondition_id'),
+    preconditionIndex: nullableCborIndex(tuple[3], 'sql_rejection_attribution.precondition_index'),
+    statementIndex: nullableCborIndex(tuple[4], 'sql_rejection_attribution.statement_index'),
+    constraintIdentity,
+    triggerIdentity,
+  }
+  assertAttributionShape(decoded)
+  return decoded
+}
+
+export function encodeSqlRejectionAttribution(value: SqlRejectionAttribution): Uint8Array {
+  return encodeCanonicalCbor(sqlRejectionAttributionToCbor(value))
+}
+
+export function decodeSqlRejectionAttribution(bytes: Uint8Array): SqlRejectionAttribution {
+  return sqlRejectionAttributionFromCbor(assertCanonicalCbor(bytes))
 }
 
 export function numberToCanonicalReal(value: number): CanonicalSqlValue {
@@ -552,12 +672,102 @@ function expectEightBytes(value: Uint8Array, name: string): Uint8Array {
   return value
 }
 
+function finiteRealBits(value: Uint8Array, name: string): Uint8Array {
+  const bits = expectEightBytes(value, name)
+  const number = new DataView(bits.buffer, bits.byteOffset, 8).getFloat64(0, false)
+  protocolInvariant(Number.isFinite(number), 'SCHEMA_INVALID', `${name} must encode a finite binary64 value`)
+  return bits
+}
+
+function assertValueMatchesColumn(
+  column: CanonicalSqlColumn,
+  value: CanonicalSqlValue,
+  rowIndex: number,
+  columnIndex: number,
+): void {
+  const location = `SQL result row ${rowIndex} column ${columnIndex}`
+  protocolInvariant(column.nullable !== false || value.kind !== 'null', 'SCHEMA_INVALID', `${location} violates nonnullable descriptor`)
+  if (value.kind === 'null' || column.type.kind === 'dynamic') return
+  if (column.type.kind === 'storage') {
+    protocolInvariant(value.kind === column.type.storage, 'SCHEMA_INVALID', `${location} violates storage descriptor`)
+    return
+  }
+  if (column.type.kind === 'logical') {
+    protocolInvariant(value.kind === 'logical' && logicalValueMatchesType(value.value, column.type.logicalType), 'SCHEMA_INVALID', `${location} violates logical descriptor`)
+    return
+  }
+  protocolInvariant(
+    value.kind === 'registered' && value.typeId === column.type.typeId &&
+      compareBytes(value.implementationDigest, column.type.implementationDigest) === 0,
+    'SCHEMA_INVALID', `${location} violates registered descriptor`,
+  )
+}
+
+function logicalValueMatchesType(value: LogicalValue, type: LogicalType): boolean {
+  switch (type.kind) {
+    case 'boolean': case 'int64': case 'uuid': case 'timestamp_ms': case 'duration_ms': case 'json':
+      return value.kind === type.kind
+    case 'decimal': return value.kind === 'decimal' && value.scale === type.scale &&
+      decimalDigits(value.coefficient) <= type.precision
+    case 'text': return value.kind === 'text'
+    case 'blob': return value.kind === 'blob' && (type.maxBytes === undefined || value.bytes.length <= type.maxBytes)
+    case 'vector': return value.kind === 'vector' && value.element === type.element && value.dimensions === type.dimensions
+  }
+}
+
+function decimalDigits(value: bigint): number {
+  const magnitude = value < 0n ? -value : value
+  return magnitude === 0n ? 1 : magnitude.toString(10).length
+}
+
+function assertStatementResultShape(value: AcceptedStatementResult): void {
+  const dml = value.statementClass === 'insert' || value.statementClass === 'update' || value.statementClass === 'delete'
+  protocolInvariant(dml === (value.affectedRows !== null), 'SCHEMA_INVALID', 'Affected row presence disagrees with statement class')
+  if (value.statementClass === 'read' || value.statementClass === 'pragma') {
+    protocolInvariant(value.result !== null, 'SCHEMA_INVALID', 'Result-producing statement has no result')
+  }
+  if (value.statementClass === 'schema') protocolInvariant(value.result === null, 'SCHEMA_INVALID', 'Schema statement cannot carry a result')
+  if (dml && value.result !== null) protocolInvariant(value.result.mode === 'multiset', 'SCHEMA_INVALID', 'DML RETURNING result must be a multiset')
+}
+
+function assertNonemptyUtf8(value: Uint8Array, name: string): void {
+  protocolInvariant(value.length > 0, 'SCHEMA_INVALID', `${name} cannot be empty`)
+  try { new TextDecoder('utf-8', { fatal: true }).decode(value) } catch {
+    protocolInvariant(false, 'SCHEMA_INVALID', `${name} is invalid UTF-8`)
+  }
+}
+
+function nullableIndex(value: number | null, name: string): bigint | null {
+  return value === null ? null : BigInt(safeIndex(value, name))
+}
+
+function nullableCborIndex(value: CborValue | undefined, name: string): number | null {
+  return value === null ? null : safeIndex(Number(expectUint64(value ?? null, name)), name)
+}
+
+function assertAttributionShape(value: SqlRejectionAttribution): void {
+  if (value.phase === 'precondition') {
+    protocolInvariant(value.preconditionId !== null && value.preconditionIndex !== null && value.statementIndex === null, 'SCHEMA_INVALID', 'Precondition attribution has invalid indices')
+  } else if (value.phase === 'statement') {
+    protocolInvariant(value.preconditionId === null && value.preconditionIndex === null && value.statementIndex !== null, 'SCHEMA_INVALID', 'Statement attribution has invalid indices')
+  } else {
+    protocolInvariant(value.preconditionId === null && value.preconditionIndex === null && value.statementIndex === null, 'SCHEMA_INVALID', 'Finalize attribution has invalid indices')
+  }
+  protocolInvariant(value.constraintIdentity === null || value.constraintIdentity.objectKind === 'constraint', 'SCHEMA_INVALID', 'Constraint attribution has the wrong object kind')
+  protocolInvariant(value.triggerIdentity === null || value.triggerIdentity.objectKind === 'trigger', 'SCHEMA_INVALID', 'Trigger attribution has the wrong object kind')
+}
+
 function copySqlValue(value: CanonicalSqlValue): CanonicalSqlValue {
   switch (value.kind) {
     case 'real': return { kind: 'real', bits: Uint8Array.from(value.bits) }
     case 'text': return { kind: 'text', utf8: Uint8Array.from(value.utf8) }
     case 'blob': return { kind: 'blob', bytes: Uint8Array.from(value.bytes) }
     case 'logical': return { kind: 'logical', value: structuredClone(value.value) }
+    case 'registered': return {
+      kind: 'registered', typeId: value.typeId,
+      implementationDigest: Uint8Array.from(value.implementationDigest),
+      canonicalPayload: Uint8Array.from(value.canonicalPayload),
+    }
     default: return value
   }
 }

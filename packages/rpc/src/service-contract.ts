@@ -80,7 +80,8 @@ export interface RpcMaterializedOutcome {
   readonly failingPreconditionIndex: number | null
   readonly failingStatementIndex: number | null
   readonly failurePhase: 'precondition' | 'statement' | 'finalize' | null
-  readonly failingConstraintId: number | null
+  readonly failingConstraintIdentity: Uint8Array | null
+  readonly failingTriggerIdentity: Uint8Array | null
   readonly resultEnvelopeVersion: 1 | null
   readonly resultEnvelope: Uint8Array | null
   readonly resultDigest: Uint8Array | null

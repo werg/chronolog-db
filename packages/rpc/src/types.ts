@@ -1,3 +1,5 @@
+import type { CanonicalSchemaIdentity } from '@chronolog/protocol'
+
 /** Chronolog's local RPC API. Consensus codecs are versioned separately. */
 export const RPC_API_VERSION = 'chronolog.rpc' as const
 
@@ -230,10 +232,11 @@ export type TransactionPhase = 'candidate_published' | 'collecting_attestations'
 export interface RejectionAttribution {
   readonly phase: 'precondition' | 'statement' | 'finalize'
   readonly code: string
-  readonly preconditionId?: number
-  readonly preconditionIndex?: number
-  readonly statementIndex?: number
-  readonly constraintId?: number
+  readonly preconditionId: number | null
+  readonly preconditionIndex: number | null
+  readonly statementIndex: number | null
+  readonly constraintIdentity: CanonicalSchemaIdentity | null
+  readonly triggerIdentity: CanonicalSchemaIdentity | null
   readonly applicationLabel?: string
 }
 export type TransactionResult =

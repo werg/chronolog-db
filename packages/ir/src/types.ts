@@ -82,6 +82,16 @@ export interface SemanticResourceLimits {
   readonly maxVectorDimensions: number
   readonly maxRuleDepth: number
   readonly maxWasmFuel: bigint
+  readonly maxResultColumnsPerStatement: number
+  readonly maxResultRowsPerStatement: number
+  readonly maxResultBytesPerStatement: number
+  readonly maxTransactionResultRows: number
+  readonly maxTransactionResultBytes: number
+  readonly maxResultValueBytes: number
+  readonly maxResultSortWork: number
+  readonly maxOrderedMutationTargets: number
+  readonly maxOrderedMutationIdentityBytes: number
+  readonly maxOrderedMutationBindings: number
 }
 export interface ExecutionFeatures {
   readonly decimal: boolean
@@ -101,4 +111,12 @@ export interface ExecutionManifest {
   readonly modules: readonly RegisteredModule[]
   readonly features: ExecutionFeatures
   readonly resources: SemanticResourceLimits
+  readonly transactionResults: {
+    readonly envelopeVersion: 1
+    readonly valueProfile: 'sqlite-finite-binary64-v1'
+    readonly canonicalizationProfile: 'sqlite-result-modes-v1'
+    readonly sqlResultDigestDomain: 'chronolog-canonical-sql-result-v1\0'
+    readonly envelopeDigestDomain: 'chronolog-transaction-result-envelope-v1\0'
+  }
+  readonly errorCodes: readonly string[]
 }

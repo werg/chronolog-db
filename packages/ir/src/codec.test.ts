@@ -42,7 +42,25 @@ const manifest: ExecutionManifest = {
     maxVectorDimensions: 1_024,
     maxRuleDepth: 0,
     maxWasmFuel: 0n,
+    maxResultColumnsPerStatement: 128,
+    maxResultRowsPerStatement: 1_000,
+    maxResultBytesPerStatement: 1_000_000,
+    maxTransactionResultRows: 4_000,
+    maxTransactionResultBytes: 2_000_000,
+    maxResultValueBytes: 500_000,
+    maxResultSortWork: 4_000_000,
+    maxOrderedMutationTargets: 1_000,
+    maxOrderedMutationIdentityBytes: 500_000,
+    maxOrderedMutationBindings: 4_000,
   },
+  transactionResults: {
+    envelopeVersion: 1,
+    valueProfile: 'sqlite-finite-binary64-v1',
+    canonicalizationProfile: 'sqlite-result-modes-v1',
+    sqlResultDigestDomain: 'chronolog-canonical-sql-result-v1\0',
+    envelopeDigestDomain: 'chronolog-transaction-result-envelope-v1\0',
+  },
+  errorCodes: ['SQL_ASSERTION_FALSE'],
 }
 
 describe('logical values and execution profile codecs', () => {

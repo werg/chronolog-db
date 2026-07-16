@@ -250,12 +250,28 @@ function executionManifestToCbor(value: ExecutionManifest): CborValue {
     value.modules.map(registeredModuleToCbor),
     featuresToCbor(value.features),
     resourcesToCbor(value.resources),
+    [
+      1n,
+      value.transactionResults.valueProfile,
+      value.transactionResults.canonicalizationProfile,
+      value.transactionResults.sqlResultDigestDomain,
+      value.transactionResults.envelopeDigestDomain,
+    ],
+    value.errorCodes,
   ]
 }
 
 function executionManifestFromCbor(value: CborValue): ExecutionManifest {
   const items = expectArray(value, 'execution_manifest')
-  canonicalInvariant(items.length === 9 && items[0] === 1n, 'SCHEMA_INVALID', 'Unsupported execution manifest')
+  canonicalInvariant(items.length === 11 && items[0] === 1n, 'SCHEMA_INVALID', 'Unsupported execution manifest')
+  const transactionResults = exactArray(items[9] ?? null, 5, 'transaction_result_profile')
+  canonicalInvariant(
+    transactionResults[0] === 1n && transactionResults[1] === 'sqlite-finite-binary64-v1' &&
+    transactionResults[2] === 'sqlite-result-modes-v1' &&
+    transactionResults[3] === 'chronolog-canonical-sql-result-v1\0' &&
+    transactionResults[4] === 'chronolog-transaction-result-envelope-v1\0',
+    'SCHEMA_INVALID', 'Unsupported transaction result profile',
+  )
   return {
     version: 1,
     profile: expectString(items[1] ?? null, 'execution_manifest.profile'),
@@ -266,6 +282,14 @@ function executionManifestFromCbor(value: CborValue): ExecutionManifest {
     modules: expectArray(items[6] ?? null, 'execution_manifest.modules').map(registeredModuleFromCbor),
     features: featuresFromCbor(items[7] ?? null),
     resources: resourcesFromCbor(items[8] ?? null),
+    transactionResults: {
+      envelopeVersion: 1,
+      valueProfile: 'sqlite-finite-binary64-v1',
+      canonicalizationProfile: 'sqlite-result-modes-v1',
+      sqlResultDigestDomain: 'chronolog-canonical-sql-result-v1\0',
+      envelopeDigestDomain: 'chronolog-transaction-result-envelope-v1\0',
+    },
+    errorCodes: expectArray(items[10] ?? null, 'execution_manifest.error_codes').map((item) => expectString(item, 'execution_manifest.error_code')),
   }
 }
 
@@ -373,11 +397,21 @@ function resourcesToCbor(value: SemanticResourceLimits): CborValue {
     uint(value.maxVectorDimensions, 'resources.maxVectorDimensions'),
     uint(value.maxRuleDepth, 'resources.maxRuleDepth'),
     value.maxWasmFuel,
+    uint(value.maxResultColumnsPerStatement, 'resources.maxResultColumnsPerStatement'),
+    uint(value.maxResultRowsPerStatement, 'resources.maxResultRowsPerStatement'),
+    uint(value.maxResultBytesPerStatement, 'resources.maxResultBytesPerStatement'),
+    uint(value.maxTransactionResultRows, 'resources.maxTransactionResultRows'),
+    uint(value.maxTransactionResultBytes, 'resources.maxTransactionResultBytes'),
+    uint(value.maxResultValueBytes, 'resources.maxResultValueBytes'),
+    uint(value.maxResultSortWork, 'resources.maxResultSortWork'),
+    uint(value.maxOrderedMutationTargets, 'resources.maxOrderedMutationTargets'),
+    uint(value.maxOrderedMutationIdentityBytes, 'resources.maxOrderedMutationIdentityBytes'),
+    uint(value.maxOrderedMutationBindings, 'resources.maxOrderedMutationBindings'),
   ]
 }
 
 function resourcesFromCbor(value: CborValue): SemanticResourceLimits {
-  const items = exactArray(value, 8, 'semantic_resource_limits')
+  const items = exactArray(value, 18, 'semantic_resource_limits')
   return {
     maxProgramNodes: safeUint(items[0] ?? null, 'resources.maxProgramNodes'),
     maxExpressionDepth: safeUint(items[1] ?? null, 'resources.maxExpressionDepth'),
@@ -387,6 +421,16 @@ function resourcesFromCbor(value: CborValue): SemanticResourceLimits {
     maxVectorDimensions: safeUint(items[5] ?? null, 'resources.maxVectorDimensions'),
     maxRuleDepth: safeUint(items[6] ?? null, 'resources.maxRuleDepth'),
     maxWasmFuel: expectBigint(items[7] ?? null, 'resources.maxWasmFuel'),
+    maxResultColumnsPerStatement: safeUint(items[8] ?? null, 'resources.maxResultColumnsPerStatement'),
+    maxResultRowsPerStatement: safeUint(items[9] ?? null, 'resources.maxResultRowsPerStatement'),
+    maxResultBytesPerStatement: safeUint(items[10] ?? null, 'resources.maxResultBytesPerStatement'),
+    maxTransactionResultRows: safeUint(items[11] ?? null, 'resources.maxTransactionResultRows'),
+    maxTransactionResultBytes: safeUint(items[12] ?? null, 'resources.maxTransactionResultBytes'),
+    maxResultValueBytes: safeUint(items[13] ?? null, 'resources.maxResultValueBytes'),
+    maxResultSortWork: safeUint(items[14] ?? null, 'resources.maxResultSortWork'),
+    maxOrderedMutationTargets: safeUint(items[15] ?? null, 'resources.maxOrderedMutationTargets'),
+    maxOrderedMutationIdentityBytes: safeUint(items[16] ?? null, 'resources.maxOrderedMutationIdentityBytes'),
+    maxOrderedMutationBindings: safeUint(items[17] ?? null, 'resources.maxOrderedMutationBindings'),
   }
 }
 
@@ -528,9 +572,29 @@ function assertExecutionManifest(value: ExecutionManifest): void {
   }
   canonicalInvariant(
     resources.maxProgramNodes > 0 && resources.maxExpressionDepth > 0 && resources.maxQueryRows > 0 &&
-    resources.maxResultBytes > 0 && resources.maxJsonDepth > 0 && resources.maxVectorDimensions > 0,
+    resources.maxResultBytes > 0 && resources.maxJsonDepth > 0 && resources.maxVectorDimensions > 0 &&
+    resources.maxResultColumnsPerStatement > 0 && resources.maxResultRowsPerStatement > 0 &&
+    resources.maxResultBytesPerStatement > 0 && resources.maxTransactionResultRows > 0 &&
+    resources.maxTransactionResultBytes > 0 && resources.maxResultValueBytes > 0 &&
+    resources.maxResultSortWork > 0 && resources.maxOrderedMutationTargets > 0 &&
+    resources.maxOrderedMutationIdentityBytes > 0 && resources.maxOrderedMutationBindings > 0,
     'SCHEMA_INVALID',
     'Execution resource ceilings must be positive',
+  )
+  canonicalInvariant(
+    value.transactionResults.envelopeVersion === 1 &&
+    value.transactionResults.valueProfile === 'sqlite-finite-binary64-v1' &&
+    value.transactionResults.canonicalizationProfile === 'sqlite-result-modes-v1' &&
+    value.transactionResults.sqlResultDigestDomain === 'chronolog-canonical-sql-result-v1\0' &&
+    value.transactionResults.envelopeDigestDomain === 'chronolog-transaction-result-envelope-v1\0',
+    'SCHEMA_INVALID', 'Transaction result profile is invalid',
+  )
+  const sortedErrorCodes = [...value.errorCodes].sort()
+  canonicalInvariant(
+    value.errorCodes.length > 0 && value.errorCodes.every((code, index) =>
+      /^[A-Z][A-Z0-9_]*$/u.test(code) && code === sortedErrorCodes[index] &&
+      (index === 0 || code !== value.errorCodes[index - 1])),
+    'SCHEMA_INVALID', 'Execution error-code registry must be sorted, unique canonical codes',
   )
 }
 

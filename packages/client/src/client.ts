@@ -94,7 +94,8 @@ export interface CompiledSqlStatement {
   readonly parameters?: ClientSqlBindings
 }
 
-export type DecodedSqlValue = null | bigint | number | string | Uint8Array | LogicalValue
+export type DecodedSqlValue = null | bigint | number | string | Uint8Array | LogicalValue |
+  Extract<CanonicalSqlValue, { readonly kind: 'registered' }>
 export interface DecodedSqlResult {
   readonly mode: SqlResultMode
   readonly columns: readonly CanonicalSqlColumn[]
@@ -480,6 +481,7 @@ export class ChronologClient {
 
   transactionResult(transactionId: string): StreamResource<TransactionResultSnapshot | null> {
     const requestId = this._requestId()
+    let outcomeCursor: string | undefined
     return this.#track(new StreamResource({
       open: (cursor, signal) => mapAsyncAwait(
         this.#transport.stream('transaction.streamOutcome', {
@@ -488,11 +490,20 @@ export class ChronologClient {
           requestId,
           ...(cursor === undefined ? {} : { resumeAfterEventSetRevision: cursor }),
         }, this.#callOptions(signal)),
-        async (outcome): Promise<TransactionResultSnapshot | null> => outcome.outcome.type === 'accepted'
-          ? this.getTransactionResult(transactionId, { atMaterializedRevision: outcome.materializedRevision })
-          : null,
+        async (outcome): Promise<TransactionResultSnapshot | null> => {
+          outcomeCursor = outcome.eventSetRevision
+          if (outcome.outcome.type !== 'accepted') return null
+          try {
+            return await this.getTransactionResult(transactionId, { atMaterializedRevision: outcome.materializedRevision })
+          } catch (error) {
+            if (isChronologRpcError(error) && error.code === 'revision_not_retained') return null
+            throw error
+          }
+        },
       ),
-      cursor: (value) => value?.revision.eventSetRevision,
+      // Resume the source outcome stream from the event that was consumed,
+      // including when its accepted result revision was no longer retained.
+      cursor: () => outcomeCursor,
       ...(this.#streamRetryDelayMs === undefined ? {} : { retryDelayMs: this.#streamRetryDelayMs }),
     }))
   }
@@ -629,6 +640,12 @@ export function decodeSqlValue(value: CanonicalSqlValue): DecodedSqlValue {
     case 'text': return new TextDecoder('utf-8', { fatal: true }).decode(value.utf8)
     case 'blob': return Uint8Array.from(value.bytes)
     case 'logical': return value.value
+    case 'registered': return {
+      kind: 'registered',
+      typeId: value.typeId,
+      implementationDigest: Uint8Array.from(value.implementationDigest),
+      canonicalPayload: Uint8Array.from(value.canonicalPayload),
+    }
   }
 }
 

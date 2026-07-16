@@ -10,6 +10,8 @@ export type RpcErrorCode =
   | 'resource_exhausted'
   | 'failed_precondition'
   | 'revision_unavailable'
+  | 'revision_not_retained'
+  | 'result_not_available'
   | 'draft_expired'
   | 'node_starting'
   | 'node_replaying'

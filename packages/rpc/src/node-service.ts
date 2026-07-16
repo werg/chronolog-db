@@ -4,6 +4,8 @@ import { sha256, utf8 } from '@chronolog/canonical'
 import { decodeLogicalValue, encodeLogicalValue } from '@chronolog/ir'
 import {
   decodeCanonicalSqlResult,
+  decodeCanonicalSchemaIdentity,
+  decodeTransactionResultEnvelope,
   digestCanonicalSqlResult,
   digestTransactionResultEnvelope,
   encodeCanonicalSqlResult,
@@ -566,17 +568,25 @@ export class NodeRpcService implements ChronologRpcService {
   async getTransactionResult(request: GetTransactionResultRequest, _context: RpcCallContext): Promise<GetTransactionResultResponse> {
     this.#assertGroup(request.groupId)
     if (request.atMaterializedRevision !== undefined && BigInt(request.atMaterializedRevision) !== this.#node.materializedRevision) {
-      throw revisionUnavailable('Requested result revision is not retained locally')
+      throw new ChronologRpcError('revision_not_retained', 'Requested result revision is not retained locally')
     }
     const txId = utf8(request.transactionId)
     const outcome = this.#node.outcome(txId)
     if (outcome === null) throw new ChronologRpcError('not_found', 'Transaction has no materialized outcome')
-    if (outcome.outcome !== 'accepted') throw failed('Rejected transactions do not have result envelopes')
-    const envelope = this.#node.transactionResult(txId)
-    if (envelope === null) throw new ChronologRpcError('internal', 'Accepted transaction result envelope is unavailable')
-    const encoded = encodeTransactionResultEnvelope(envelope)
+    if (outcome.outcome !== 'accepted') {
+      throw new ChronologRpcError('result_not_available', 'Rejected transactions do not have result envelopes')
+    }
+    if (outcome.resultEnvelopeVersion !== 1 || outcome.resultDigest === null) {
+      throw new ChronologRpcError('internal', 'Accepted transaction result reference is incomplete')
+    }
+    if (outcome.resultEnvelope === null) throw new ChronologRpcError('internal', 'Accepted transaction result envelope is unavailable')
+    const encoded = Uint8Array.from(outcome.resultEnvelope)
+    const envelope = decodeTransactionResultEnvelope(encoded)
+    if (!equalBytes(encodeTransactionResultEnvelope(envelope), encoded)) {
+      throw new ChronologRpcError('internal', 'Stored transaction result envelope is not canonical')
+    }
     const digest = await digestTransactionResultEnvelope(encoded)
-    if (outcome.resultDigest !== null && !equalBytes(digest, outcome.resultDigest)) throw new ChronologRpcError('internal', 'Stored transaction result digest mismatch')
+    if (!equalBytes(digest, outcome.resultDigest)) throw new ChronologRpcError('internal', 'Stored transaction result digest mismatch')
     return {
       revision: this.#revision(this.#node.materializedRevision, this.#node.orderLength),
       transactionId: request.transactionId,
@@ -751,10 +761,15 @@ export class NodeRpcService implements ChronologRpcService {
     return {
       phase: outcome.failurePhase ?? 'finalize',
       code: outcome.rejectionCode ?? outcome.outcome,
-      ...(outcome.failingPreconditionId === null ? {} : { preconditionId: outcome.failingPreconditionId }),
-      ...(outcome.failingPreconditionIndex === null ? {} : { preconditionIndex: outcome.failingPreconditionIndex }),
-      ...(outcome.failingStatementIndex === null ? {} : { statementIndex: outcome.failingStatementIndex }),
-      ...(outcome.failingConstraintId === null ? {} : { constraintId: outcome.failingConstraintId }),
+      preconditionId: outcome.failingPreconditionId,
+      preconditionIndex: outcome.failingPreconditionIndex,
+      statementIndex: outcome.failingStatementIndex,
+      constraintIdentity: outcome.failingConstraintIdentity === null
+        ? null
+        : decodeCanonicalSchemaIdentity(outcome.failingConstraintIdentity),
+      triggerIdentity: outcome.failingTriggerIdentity === null
+        ? null
+        : decodeCanonicalSchemaIdentity(outcome.failingTriggerIdentity),
       ...(label === undefined ? {} : { applicationLabel: label }),
     }
   }

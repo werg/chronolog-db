@@ -29,12 +29,33 @@ export function initializeSystemLog(database: DatabaseLike): void {
       failure_phase TEXT CHECK (
         failure_phase IS NULL OR failure_phase IN ('precondition', 'statement', 'finalize')
       ),
-      failing_constraint_id INTEGER,
+      failing_constraint_identity BLOB,
+      failing_trigger_identity BLOB,
       result_envelope_version INTEGER CHECK (
         result_envelope_version IS NULL OR result_envelope_version = 1
       ),
       result_envelope BLOB,
-      result_digest BLOB CHECK (result_digest IS NULL OR length(result_digest) = 32)
+      result_digest BLOB CHECK (result_digest IS NULL OR length(result_digest) = 32),
+      CHECK (
+        (outcome = 'accepted' AND result_envelope_version = 1
+          AND result_envelope IS NOT NULL AND result_digest IS NOT NULL)
+        OR
+        (outcome <> 'accepted' AND result_envelope_version IS NULL
+          AND result_envelope IS NULL AND result_digest IS NULL)
+      ),
+      CHECK (
+        outcome <> 'accepted' OR
+        (failing_constraint_identity IS NULL AND failing_trigger_identity IS NULL)
+      ),
+      CHECK (
+        (failure_phase = 'precondition' AND failing_precondition_id IS NOT NULL
+          AND failing_precondition_index IS NOT NULL AND failing_statement_index IS NULL)
+        OR (failure_phase = 'statement' AND failing_precondition_id IS NULL
+          AND failing_precondition_index IS NULL AND failing_statement_index IS NOT NULL)
+        OR (failure_phase = 'finalize' AND failing_precondition_id IS NULL
+          AND failing_precondition_index IS NULL AND failing_statement_index IS NULL)
+        OR (failure_phase IS NULL AND outcome = 'accepted')
+      )
     ) STRICT
   `)
 }
@@ -72,7 +93,8 @@ export function readSystemLog(database: DatabaseLike): TransactionLogRow[] {
            author_feed_sequence, candidate_digest, canonical_candidate,
            outcome, rejection_code, failing_precondition_id,
            failing_precondition_index, failing_statement_index, failure_phase,
-           failing_constraint_id, result_envelope_version, result_envelope, result_digest
+           failing_constraint_identity, failing_trigger_identity,
+           result_envelope_version, result_envelope, result_digest
       FROM ${TRANSACTION_LOG_TABLE}
      ORDER BY order_index
   `)
@@ -106,7 +128,8 @@ export function readSystemLog(database: DatabaseLike): TransactionLogRow[] {
       failingPreconditionIndex: asNullableId(raw.failing_precondition_index),
       failingStatementIndex: asNullableId(raw.failing_statement_index),
       failurePhase: asNullablePhase(raw.failure_phase),
-      failingConstraintId: asNullableId(raw.failing_constraint_id),
+      failingConstraintIdentity: raw.failing_constraint_identity === null ? null : asBytes(raw.failing_constraint_identity),
+      failingTriggerIdentity: raw.failing_trigger_identity === null ? null : asBytes(raw.failing_trigger_identity),
       resultEnvelopeVersion: raw.result_envelope_version === null ? null : 1,
       resultEnvelope: raw.result_envelope === null ? null : asBytes(raw.result_envelope),
       resultDigest: raw.result_digest === null ? null : asDigest(raw.result_digest),
@@ -130,7 +153,8 @@ export function insertSystemLogRow(
     readonly failingPreconditionIndex: number | null
     readonly failingStatementIndex: number | null
     readonly failurePhase: 'precondition' | 'statement' | 'finalize' | null
-    readonly failingConstraintId: number | null
+    readonly failingConstraintIdentity: Uint8Array | null
+    readonly failingTriggerIdentity: Uint8Array | null
     readonly resultEnvelopeVersion: 1 | null
     readonly resultEnvelope: Uint8Array | null
     readonly resultDigest: Uint8Array | null
@@ -143,8 +167,9 @@ export function insertSystemLogRow(
         author_feed_sequence, candidate_digest, canonical_candidate,
         outcome, rejection_code, failing_precondition_id,
         failing_precondition_index, failing_statement_index, failure_phase,
-        failing_constraint_id, result_envelope_version, result_envelope, result_digest
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        failing_constraint_identity, failing_trigger_identity,
+        result_envelope_version, result_envelope, result_digest
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
     .run(
       row.txId,
@@ -160,7 +185,8 @@ export function insertSystemLogRow(
       row.failingPreconditionIndex,
       row.failingStatementIndex,
       row.failurePhase,
-      row.failingConstraintId,
+      row.failingConstraintIdentity,
+      row.failingTriggerIdentity,
       row.resultEnvelopeVersion,
       row.resultEnvelope,
       row.resultDigest,

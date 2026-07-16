@@ -47,6 +47,18 @@ export interface CompiledSqlSource {
   readonly parameters: readonly CompiledSqlParameter[]
   readonly maximumParameterIndex: number
   readonly sourceSpan: SqlSourceSpan
+  readonly orderedMutation: OrderedMutationPlan | null
+}
+
+export interface OrderedMutationPlan {
+  readonly targetTable: string
+  readonly selectionSqlTemplate: string
+  readonly selectionMaximumParameterIndex: number
+  readonly selectionColumnsToken: string
+  readonly identityOrderToken: string
+  readonly mutationSqlTemplate: string
+  readonly assignedColumns: readonly string[]
+  readonly identityPredicateToken: string
 }
 
 export interface CompiledSqlProgram {
@@ -112,7 +124,8 @@ export function compileSqlStatement(
   statement: SqlStatement,
   mode: SqlCompilationMode,
 ): CompiledSqlSource {
-  const ast = parseOne(statement.sql)
+  const orderedMutationSyntax = parseOrderedMutationSyntax(statement.sql)
+  const ast = parseOne(orderedMutationSyntax?.parserSql ?? statement.sql)
   if (PROHIBITED_STATEMENTS.has(ast.type)) throw compilerError('SQL_STATEMENT_PROHIBITED', statement.sql, ast)
   if (ast.type === 'AnalyzeStmt') throw compilerError('SQL_ANALYZE_TEMPORARILY_GATED', statement.sql, ast)
   if (ast.type === 'CreateVirtualTableStmt') throw compilerError('SQL_VIRTUAL_TABLE_TEMPORARILY_GATED', statement.sql, ast)
@@ -124,9 +137,11 @@ export function compileSqlStatement(
   validateTemporaryObjects(ast, statement.sql)
   validateObjectNames(ast, statement.sql)
   validateDeterministicExpressions(ast, statement.sql)
-  validateOrderSensitiveMutation(ast, statement.sql)
+  validateOrderSensitiveMutation(ast, statement.sql, orderedMutationSyntax !== null)
 
-  const parameterPlan = parameterPlanFor(ast, statement.sql)
+  const parameterPlan = orderedMutationSyntax === null
+    ? parameterPlanFor(ast, statement.sql)
+    : parameterPlanFromSource(statement.sql)
   validateBindings(statement.bindings, parameterPlan.parameters, parameterPlan.maximumParameterIndex)
   const statementClass = classifyStatement(ast)
   const producesResult = ast.type === 'SelectStmt' || ast.type === 'PragmaStmt' || (
@@ -136,6 +151,14 @@ export function compileSqlStatement(
   const resultMode = producesResult
     ? ast.type === 'SelectStmt' && ast.body.orderBy !== undefined ? 'ordered' : 'multiset'
     : null
+  const orderedMutation = orderedMutationSyntax === null ? null : buildOrderedMutationPlan(ast, statement.sql, orderedMutationSyntax)
+  if (orderedMutation !== null) {
+    const validationSql = orderedMutation.selectionSqlTemplate
+      .replace(orderedMutation.selectionColumnsToken, 'rowid')
+      .replace(orderedMutation.identityOrderToken, 'rowid')
+    const selectionAst = parseOne(validationSql)
+    validateDeterministicExpressions(selectionAst, validationSql)
+  }
   return {
     source: statement,
     ast,
@@ -148,6 +171,7 @@ export function compileSqlStatement(
     parameters: parameterPlan.parameters,
     maximumParameterIndex: parameterPlan.maximumParameterIndex,
     sourceSpan: sourceSpan(statement.sql, ast),
+    orderedMutation,
   }
 }
 
@@ -375,10 +399,10 @@ function hasUnsafeTimeArgument(node: FunctionCallExpr): boolean {
   })
 }
 
-function validateOrderSensitiveMutation(ast: Stmt, sql: string): void {
+function validateOrderSensitiveMutation(ast: Stmt, sql: string, hasPrivatePlan: boolean): void {
   if ((ast.type === 'UpdateStmt' || ast.type === 'DeleteStmt') && (
     ast.orderBy !== undefined || ast.limit !== undefined
-  )) throw compilerError('SQL_ORDERED_MUTATION_TEMPORARILY_GATED', sql, ast)
+  ) && !hasPrivatePlan) throw compilerError('SQL_ORDERED_MUTATION_TEMPORARILY_GATED', sql, ast)
   if (ast.type === 'UpdateStmt' && (ast.from !== undefined || ast.orConflict !== undefined)) {
     throw compilerError('SQL_ORDER_SENSITIVE_UPDATE_TEMPORARILY_GATED', sql, ast)
   }
@@ -389,6 +413,227 @@ function validateOrderSensitiveMutation(ast: Stmt, sql: string): void {
     throw compilerError('SQL_CREATE_TABLE_AS_SELECT_TEMPORARILY_GATED', sql, ast.body)
   }
 }
+
+interface OrderedMutationSyntax {
+  readonly parserSql: string
+  readonly cutoff: number
+  readonly whereKeyword: number | null
+  readonly returningKeyword: number | null
+  readonly orderExpressionStart: number | null
+  readonly limitKeyword: number
+  readonly limitExpressionStart: number
+}
+
+const IDENTITY_PREDICATE_TOKEN = '__chronolog_ordered_target_predicate__'
+const IDENTITY_SELECT_TOKEN = '__chronolog_ordered_identity_columns__'
+const IDENTITY_ORDER_TOKEN = '__chronolog_ordered_identity_order__'
+
+function parseOrderedMutationSyntax(sql: string): OrderedMutationSyntax | null {
+  const words = topLevelWords(sql)
+  const first = words[0]?.word
+  if (first !== 'update' && first !== 'delete') return null
+  const limit = words.find((item) => item.word === 'limit')
+  if (limit === undefined) return null
+  const orderIndex = words.findIndex((item) => item.word === 'order')
+  const order = orderIndex < 0 ? undefined : words[orderIndex]
+  const by = orderIndex < 0 ? undefined : words[orderIndex + 1]
+  if (order !== undefined && by?.word !== 'by') throw new SqlCompilerError('SQL_PARSE_ERROR')
+  if (order !== undefined && order.start > limit.start) throw new SqlCompilerError('SQL_PARSE_ERROR')
+  const cutoff = order?.start ?? limit.start
+  const suffix = sql.slice(0, cutoff).trimEnd()
+  const parserSql = `${suffix}${suffix.endsWith(';') ? '' : ';'}`
+  const where = words.find((item) => item.word === 'where')
+  const returning = words.find((item) => item.word === 'returning')
+  if (returning !== undefined && returning.start > cutoff) throw new SqlCompilerError('SQL_ORDERED_MUTATION_RETURNING_POSITION_INVALID')
+  return {
+    parserSql,
+    cutoff,
+    whereKeyword: where !== undefined && where.start < cutoff ? where.start : null,
+    returningKeyword: returning !== undefined && returning.start < cutoff ? returning.start : null,
+    orderExpressionStart: by === undefined ? null : by.end,
+    limitKeyword: limit.start,
+    limitExpressionStart: limit.end,
+  }
+}
+
+function buildOrderedMutationPlan(ast: Stmt, sql: string, syntax: OrderedMutationSyntax): OrderedMutationPlan {
+  if (ast.type !== 'UpdateStmt' && ast.type !== 'DeleteStmt') throw new SqlCompilerError('SQL_ORDERED_MUTATION_PARSE_MISMATCH')
+  if (ast.type === 'UpdateStmt' && (ast.orConflict !== undefined || ast.from !== undefined)) {
+    throw new SqlCompilerError('SQL_ORDERED_MUTATION_SET_STABILITY_UNPROVEN')
+  }
+  if (ast.tblName.alias !== undefined || ast.tblName.dbName !== undefined) {
+    throw new SqlCompilerError('SQL_ORDERED_MUTATION_TARGET_ALIAS_GATED')
+  }
+  const parameters = parameterOccurrences(sql)
+  const targetTable = ast.tblName.objName.text
+  const targetSql = quoteSqlIdentifier(targetTable)
+  const whereExpression = ast.whereClause === undefined
+    ? '1'
+    : rewriteSourceSegment(sql, ast.whereClause.span.offset, ast.whereClause.span.offset + ast.whereClause.span.length, parameters)
+  const orderExpression = syntax.orderExpressionStart === null
+    ? ''
+    : rewriteSourceSegment(sql, syntax.orderExpressionStart, syntax.limitKeyword, parameters).trim()
+  const limitExpression = rewriteSourceSegment(sql, syntax.limitExpressionStart, sql.length, parameters).replace(/;\s*$/u, '').trim()
+  if (limitExpression.length === 0) throw new SqlCompilerError('SQL_ORDERED_MUTATION_LIMIT_REQUIRED')
+  const selectionSqlTemplate = `SELECT ${IDENTITY_SELECT_TOKEN} FROM ${targetSql} WHERE ${whereExpression} ORDER BY ${orderExpression.length === 0 ? '' : `${orderExpression}, `}${IDENTITY_ORDER_TOKEN} LIMIT ${limitExpression}`
+  const selectionMaximumParameterIndex = parameterOccurrences(selectionSqlTemplate)
+    .reduce((maximum, parameter) => Math.max(maximum, parameter.index), 0)
+  const mutationPrefixEnd = syntax.whereKeyword ?? syntax.returningKeyword ?? syntax.cutoff
+  const mutationPrefix = rewriteSourceSegment(sql, 0, mutationPrefixEnd, parameters).trimEnd()
+  const returning = syntax.returningKeyword === null
+    ? ''
+    : ` ${rewriteSourceSegment(sql, syntax.returningKeyword, syntax.cutoff, parameters).trim()}`
+  return {
+    targetTable,
+    selectionSqlTemplate,
+    selectionMaximumParameterIndex,
+    selectionColumnsToken: IDENTITY_SELECT_TOKEN,
+    identityOrderToken: IDENTITY_ORDER_TOKEN,
+    mutationSqlTemplate: `${mutationPrefix} WHERE ${IDENTITY_PREDICATE_TOKEN}${returning}`,
+    assignedColumns: ast.type === 'UpdateStmt'
+      ? ast.sets.flatMap((assignment) => assignment.colNames.map((column) => asciiLower(column.text)))
+      : [],
+    identityPredicateToken: IDENTITY_PREDICATE_TOKEN,
+  }
+}
+
+interface ParameterOccurrence { readonly start: number; readonly end: number; readonly index: number; readonly name: string | null }
+
+function parameterPlanFromSource(sql: string): {
+  readonly parameters: readonly CompiledSqlParameter[]
+  readonly maximumParameterIndex: number
+} {
+  const occurrences = parameterOccurrences(sql)
+  const grouped = new Map<number, Set<string>>()
+  for (const item of occurrences) {
+    const names = grouped.get(item.index) ?? new Set<string>()
+    if (item.name !== null) names.add(item.name)
+    grouped.set(item.index, names)
+  }
+  return {
+    maximumParameterIndex: occurrences.reduce((maximum, item) => Math.max(maximum, item.index), 0),
+    parameters: [...grouped].sort(([left], [right]) => left - right).map(([index, names]) => ({
+      index, names: [...names], referenced: true,
+    })),
+  }
+}
+
+function parameterOccurrences(sql: string): ParameterOccurrence[] {
+  const occurrences: ParameterOccurrence[] = []
+  const names = new Map<string, number>()
+  let maximum = 0
+  scanSql(sql, (start, end, token) => {
+    if (!token.startsWith('?') && !token.startsWith(':') && !token.startsWith('@') && !token.startsWith('$')) return
+    let index: number
+    let name: string | null = null
+    if (token === '?') index = maximum + 1
+    else if (token[0] === '?' && /^\?[0-9]+$/u.test(token)) index = Number(token.slice(1))
+    else {
+      name = token
+      index = names.get(token) ?? maximum + 1
+      names.set(token, index)
+    }
+    if (!Number.isSafeInteger(index) || index < 1 || index > 32_766) throw new SqlCompilerError('SQL_PARAMETER_INDEX_INVALID')
+    maximum = Math.max(maximum, index)
+    occurrences.push({ start, end, index, name })
+  })
+  return occurrences
+}
+
+function rewriteSourceSegment(sql: string, start: number, end: number, parameters: readonly ParameterOccurrence[]): string {
+  let cursor = start
+  let rewritten = ''
+  for (const parameter of parameters) {
+    if (parameter.start < start || parameter.end > end) continue
+    rewritten += sql.slice(cursor, parameter.start)
+    rewritten += `?${parameter.index}`
+    cursor = parameter.end
+  }
+  return rewritten + sql.slice(cursor, end)
+}
+
+interface TopLevelWord { readonly word: string; readonly start: number; readonly end: number }
+
+function topLevelWords(sql: string): TopLevelWord[] {
+  const words: TopLevelWord[] = []
+  scanSql(sql, (start, end, token, depth) => {
+    if (depth === 0 && /^[A-Za-z_][A-Za-z0-9_]*$/u.test(token)) words.push({ word: asciiLower(token), start, end })
+  })
+  return words
+}
+
+function scanSql(
+  sql: string,
+  visit: (start: number, end: number, token: string, depth: number) => void,
+): void {
+  let index = 0
+  let depth = 0
+  while (index < sql.length) {
+    const character = sql[index]!
+    if (character === "'" || character === '"' || character === '`' || character === '[') {
+      const close = character === '[' ? ']' : character
+      index += 1
+      while (index < sql.length) {
+        if (sql[index] === close) {
+          if (close !== ']' && sql[index + 1] === close) { index += 2; continue }
+          index += 1
+          break
+        }
+        index += 1
+      }
+      continue
+    }
+    if (character === '-' && sql[index + 1] === '-') {
+      index = sql.indexOf('\n', index + 2)
+      if (index < 0) return
+      continue
+    }
+    if (character === '/' && sql[index + 1] === '*') {
+      const close = sql.indexOf('*/', index + 2)
+      if (close < 0) return
+      index = close + 2
+      continue
+    }
+    if (character === '(') { depth += 1; index += 1; continue }
+    if (character === ')') { depth = Math.max(0, depth - 1); index += 1; continue }
+    if (/[A-Za-z_]/u.test(character)) {
+      const start = index++
+      while (index < sql.length && /[A-Za-z0-9_]/u.test(sql[index]!)) index += 1
+      visit(start, index, sql.slice(start, index), depth)
+      continue
+    }
+    if (character === '?' || character === ':' || character === '@' || character === '$') {
+      const start = index++
+      if (character === '?') {
+        while (index < sql.length && /[0-9]/u.test(sql[index]!)) index += 1
+      } else {
+        while (isSqliteParameterNameCharacter(sql[index])) index += 1
+        if (character === '$' && index > start + 1) {
+          while (sql[index] === ':' && sql[index + 1] === ':' && isSqliteParameterNameCharacter(sql[index + 2])) {
+            index += 2
+            while (isSqliteParameterNameCharacter(sql[index])) index += 1
+          }
+          if (sql[index] === '(') {
+            const close = sql.indexOf(')', index + 1)
+            if (close >= 0) index = close + 1
+          }
+        }
+        if (index === start + 1) continue
+      }
+      visit(start, index, sql.slice(start, index), depth)
+      continue
+    }
+    index += 1
+  }
+}
+
+function isSqliteParameterNameCharacter(character: string | undefined): boolean {
+  if (character === undefined) return false
+  const code = character.charCodeAt(0)
+  return /[A-Za-z0-9_]/u.test(character) || code >= 0x80
+}
+
+function quoteSqlIdentifier(value: string): string { return `"${value.replaceAll('"', '""')}"` }
 
 function classifyStatement(ast: Stmt): SqlStatementClass {
   switch (ast.type) {

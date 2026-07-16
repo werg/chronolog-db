@@ -187,6 +187,91 @@ describe('SQL-first DoltLite materialization', () => {
     expect(materializer.localSql('SELECT balance FROM accounts WHERE id = 1').rows[0]?.[0]).toEqual({ kind: 'integer', value: '90' })
     materializer.close()
   })
+
+  it('executes the conservative ordered rowid mutation subset through a frozen target vector', async () => {
+    const { path, manifest } = await fixture()
+    const materializer = await DeterministicMaterializer.open({ path, executionManifest: manifest })
+    const ordered = await transaction(1n, 'ordered-rowid-update', {
+      version: 1,
+      preconditions: [truePrecondition()],
+      body: [
+        statement('CREATE TABLE ranked (id INTEGER PRIMARY KEY, score INTEGER NOT NULL, picked INTEGER NOT NULL) STRICT'),
+        statement('INSERT INTO ranked VALUES (1, 10, 0), (2, 20, 0), (3, 10, 0), (4, 30, 0)'),
+        statement(
+          'UPDATE ranked SET picked = :picked WHERE picked = 0 RETURNING id ORDER BY score DESC LIMIT 2 OFFSET 1',
+          [{ parameter: { kind: 'name', name: ':picked' }, value: { kind: 'int64', value: 1n } }],
+        ),
+        statement('DELETE FROM ranked RETURNING id ORDER BY score LIMIT ?', [integer(1, 0n)]),
+      ],
+    }, materializer.executionManifestDigest)
+    await materializer.materialize([ordered])
+    expect(materializer.outcome(ordered.txId)).toMatchObject({ outcome: 'accepted', rejectionCode: null })
+    expect(materializer.localSql('SELECT id FROM ranked WHERE picked = 1 ORDER BY id').rows).toEqual([
+      [{ kind: 'integer', value: '1' }],
+      [{ kind: 'integer', value: '2' }],
+    ])
+    const result = materializer.transactionResult(ordered.txId)?.statements[2]
+    expect(result?.affectedRows).toBe(2n)
+    expect(result?.result?.mode).toBe('multiset')
+    expect(result?.result?.rows.map((row) => row[0])).toEqual([
+      { kind: 'integer', value: 1n },
+      { kind: 'integer', value: 2n },
+    ])
+    expect(materializer.transactionResult(ordered.txId)?.statements[3]).toMatchObject({
+      affectedRows: 0n,
+      result: { mode: 'multiset', rows: [] },
+    })
+    materializer.close()
+  })
+
+  it('charges precondition and body rows against one transaction result budget', async () => {
+    const { path, manifest } = await fixture({ maxTransactionResultRows: 1 })
+    const materializer = await DeterministicMaterializer.open({ path, executionManifest: manifest })
+    const limited = await transaction(1n, 'aggregate-result-limit', {
+      version: 1,
+      preconditions: [truePrecondition()],
+      body: [
+        statement('CREATE TABLE limited_values (id INTEGER PRIMARY KEY) STRICT'),
+        statement('INSERT INTO limited_values VALUES (1) RETURNING id'),
+      ],
+    }, materializer.executionManifestDigest)
+    await materializer.materialize([limited])
+    expect(materializer.outcome(limited.txId)).toMatchObject({
+      outcome: 'rejected_execution',
+      rejectionCode: 'SQL_TRANSACTION_RESULT_ROW_LIMIT',
+      failurePhase: 'statement',
+      failingStatementIndex: 1,
+      resultEnvelope: null,
+      resultDigest: null,
+    })
+    expect(() => materializer.localSql('SELECT * FROM limited_values')).toThrow()
+    materializer.close()
+  })
+
+  it('uses the complete declared primary key for ordered WITHOUT ROWID deletion', async () => {
+    const { path, manifest } = await fixture()
+    const materializer = await DeterministicMaterializer.open({ path, executionManifest: manifest })
+    const ordered = await transaction(1n, 'ordered-without-rowid-delete', {
+      version: 1,
+      preconditions: [truePrecondition()],
+      body: [
+        statement('CREATE TABLE queue (tenant TEXT COLLATE NOCASE, id INTEGER, score INTEGER NOT NULL, PRIMARY KEY (tenant DESC, id)) WITHOUT ROWID, STRICT'),
+        statement("INSERT INTO queue VALUES ('a', 1, 10), ('A', 2, 30), ('b', 1, 20)"),
+        statement('DELETE FROM queue WHERE score >= 0 RETURNING tenant, id ORDER BY score DESC LIMIT 1'),
+      ],
+    }, materializer.executionManifestDigest)
+    await materializer.materialize([ordered])
+    expect(materializer.outcome(ordered.txId)).toMatchObject({ outcome: 'accepted', rejectionCode: null })
+    expect(materializer.localSql('SELECT tenant, id FROM queue ORDER BY score DESC').rows).toEqual([
+      [{ kind: 'text', value: 'b' }, { kind: 'integer', value: '1' }],
+      [{ kind: 'text', value: 'a' }, { kind: 'integer', value: '1' }],
+    ])
+    expect(materializer.transactionResult(ordered.txId)?.statements[2]?.result?.rows).toEqual([[
+      { kind: 'text', utf8: utf8('A') },
+      { kind: 'integer', value: 2n },
+    ]])
+    materializer.close()
+  })
 })
 
 function updateProgram(expected: bigint, next: bigint): SqlTransactionProgram {
@@ -209,13 +294,13 @@ function statement(sql: string, bindings: readonly SqlBinding[] = []) { return {
 function integer(index: number, value: bigint): SqlBinding { return { parameter: { kind: 'index', index }, value: { kind: 'int64', value } } }
 function text(index: number, value: string): SqlBinding { return { parameter: { kind: 'index', index }, value: { kind: 'text', utf8: utf8(value) } } }
 
-async function fixture() {
+async function fixture(resources: Parameters<typeof createCoreExecutionManifest>[0]['resources'] = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'chronolog-sql-materializer-'))
   directories.push(directory)
   const native = readNativeEngineInfo()
   return {
     path: join(directory, 'application.db'),
-    manifest: createCoreExecutionManifest({ profile: 'chronolog-core-portable', engine: native.descriptor, engineDigest: native.digest }),
+    manifest: createCoreExecutionManifest({ profile: 'chronolog-core-portable', engine: native.descriptor, engineDigest: native.digest, resources }),
   }
 }
 

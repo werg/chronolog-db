@@ -49,6 +49,53 @@ describe('deterministic SQL compiler', () => {
     )
   })
 
+  it('lowers ordered mutation syntax into private frozen-rowid operations', () => {
+    const compiled = compileSqlStatement({
+      sql: 'UPDATE accounts SET value = ? WHERE active = ? RETURNING id ORDER BY score DESC LIMIT ? OFFSET ?',
+      bindings: [
+        { parameter: { kind: 'index', index: 1 }, value: { kind: 'text', utf8: new TextEncoder().encode('next') } },
+        { parameter: { kind: 'index', index: 2 }, value: { kind: 'int64', value: 1n } },
+        { parameter: { kind: 'index', index: 3 }, value: { kind: 'int64', value: 2n } },
+        { parameter: { kind: 'index', index: 4 }, value: { kind: 'int64', value: 1n } },
+      ],
+    }, 'body')
+    expect(compiled.orderedMutation?.selectionSqlTemplate).toBe(
+      'SELECT __chronolog_ordered_identity_columns__ FROM "accounts" WHERE active = ?2 ORDER BY score DESC, __chronolog_ordered_identity_order__ LIMIT ?3 OFFSET ?4',
+    )
+    expect(compiled.orderedMutation?.selectionMaximumParameterIndex).toBe(4)
+    expect(compiled.orderedMutation?.mutationSqlTemplate).toBe(
+      'UPDATE accounts SET value = ?1 WHERE __chronolog_ordered_target_predicate__ RETURNING id',
+    )
+  })
+
+  it('preserves SQLite named-parameter tokens in ordered mutations', () => {
+    const unicode = compileSqlStatement({
+      sql: 'UPDATE accounts SET value = :nächster WHERE active = 1 ORDER BY score LIMIT 1',
+      bindings: [{
+        parameter: { kind: 'name', name: ':nächster' },
+        value: { kind: 'text', utf8: new TextEncoder().encode('next') },
+      }],
+    }, 'body')
+    expect(unicode.maximumParameterIndex).toBe(1)
+    expect(unicode.orderedMutation?.selectionMaximumParameterIndex).toBe(0)
+    expect(unicode.orderedMutation?.mutationSqlTemplate).toContain('SET value = ?1')
+
+    const tcl = compileSqlStatement({
+      sql: 'DELETE FROM accounts WHERE owner = $tenant::scope(primary) ORDER BY score LIMIT 1',
+      bindings: [{
+        parameter: { kind: 'name', name: '$tenant::scope(primary)' },
+        value: { kind: 'int64', value: 7n },
+      }],
+    }, 'body')
+    expect(tcl.parameters).toEqual([{
+      index: 1,
+      names: ['$tenant::scope(primary)'],
+      referenced: true,
+    }])
+    expect(tcl.orderedMutation?.selectionSqlTemplate).toContain('owner = ?1')
+    expect(tcl.orderedMutation?.selectionMaximumParameterIndex).toBe(1)
+  })
+
   it.each([
     ['BEGIN', 'SQL_STATEMENT_PROHIBITED'],
     ['SELECT random()', 'SQL_FUNCTION_TEMPORARILY_GATED'],

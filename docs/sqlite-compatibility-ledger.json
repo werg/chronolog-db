@@ -50,7 +50,7 @@
     "CreateTriggerStmt": { "status": "profile_pinned", "reason": "profile_identity", "current": "Nested trigger bodies are parsed and validated; RAISE remains gated." },
     "CreateViewStmt": { "status": "profile_pinned", "reason": "profile_identity", "current": "View bodies are parsed and validated recursively." },
     "CreateVirtualTableStmt": { "status": "temporarily_gated", "reason": "registered_extension", "compilerError": "SQL_VIRTUAL_TABLE_TEMPORARILY_GATED" },
-    "DeleteStmt": { "status": "portable", "reason": "implemented", "current": "Exact SQL executes with bounded multiset RETURNING; optional ORDER BY/LIMIT is gated." },
+    "DeleteStmt": { "status": "portable", "reason": "implemented", "current": "Exact SQL executes with bounded multiset RETURNING; the proven ordered target-key subset uses private frozen identities." },
     "DetachStmt": { "status": "prohibited", "reason": "physical_storage", "compilerError": "SQL_STATEMENT_PROHIBITED" },
     "DropIndexStmt": { "status": "profile_pinned", "reason": "profile_identity", "current": "Executes sequentially with prefix-catalog invalidation." },
     "DropTableStmt": { "status": "profile_pinned", "reason": "profile_identity", "current": "Executes sequentially with prefix-catalog invalidation." },
@@ -67,7 +67,7 @@
     "SelectStmt": { "status": "portable", "reason": "implemented", "current": "Preconditions, observations, local queries, and bounded body results are supported subject to the feature gates below." },
     "UpdateStmt": { "status": "portable", "reason": "implemented", "current": "Exact ordinary UPDATE and bounded multiset RETURNING are supported." },
     "UpdateFromOrConflict": { "status": "temporarily_gated", "reason": "determinism_conformance", "compilerError": "SQL_ORDER_SENSITIVE_UPDATE_TEMPORARILY_GATED" },
-    "UpdateDeleteOrderLimit": { "status": "temporarily_gated", "reason": "engine_option_absent", "compilerError": "SQL_ORDERED_MUTATION_TEMPORARILY_GATED" },
+    "UpdateDeleteOrderLimit": { "status": "determinized", "reason": "canonical_lowering", "current": "The compiler parses the authored extension independently of the native SQLite option, selects a bounded rowid or complete WITHOUT ROWID primary-key vector with identity tie-breaking, and applies one private set mutation. Views, virtual tables, triggers, foreign keys, generated columns, identity/unique-key updates, non-builtin PK collations, and conflict-sensitive forms remain mechanically gated." },
     "VacuumStmt": { "status": "prohibited", "reason": "physical_storage", "compilerError": "SQL_STATEMENT_PROHIBITED" }
   },
   "queryAndExpressionFeatures": {
@@ -128,7 +128,7 @@
     "protectedWrites": { "status": "prohibited", "reason": "protected_state", "current": "chronolog_, dolt_, doltlite_, pragma_, sqlite_, and protected virtual-table names fail in compiler and authorizer." },
     "protectedReads": { "status": "prohibited", "reason": "protected_state", "current": "Only chronolog_transactions, sqlite_schema/sqlite_master, and approved pragma tables are readable." },
     "singleStatement": { "status": "prohibited", "reason": "transaction_control", "compilerError": "SQL_MULTIPLE_STATEMENTS" },
-    "sourceLimits": { "status": "determinized", "reason": "canonical_lowering", "current": "NUL, UTF-8, SQL byte length, SQLite category limits, VM steps, returned rows, and result bytes are bounded." },
+    "sourceLimits": { "status": "determinized", "reason": "canonical_lowering", "current": "NUL, UTF-8, SQL byte length, SQLite category limits, VM steps, result columns/rows/value bytes, exact statement and transaction bytes, aggregate transaction rows, canonical sort work, and ordered target identity count/bytes/bindings are bounded." },
     "operationalFailures": { "status": "determinized", "reason": "canonical_lowering", "current": "Operational SQLite primary codes abort replay; deterministic constraint/type/evaluation failures receive stable rejection codes and statement attribution." }
   },
   "resultEnvelope": {
@@ -136,7 +136,7 @@
     "status": "implemented",
     "acceptedDigestDomain": "chronolog-transaction-result-envelope-v1\\0",
     "bodyResults": "SELECT and read-only pragma rows are bounded; every DML RETURNING is a multiset; affected row counts and statement indices are committed.",
-    "rejectionAttribution": "phase, precondition id/index, statement index, and stable code are persisted; rejected candidates have no result envelope."
+    "rejectionAttribution": "phase, precondition id/index, statement index, manifest-registered stable code, and nullable canonical SQL schema identities are persisted; rejected candidates have no result envelope."
   },
   "knownTemporaryDebt": [
     "Exact SQLite 3.54 parser grammar and parser/runtime differential corpus",

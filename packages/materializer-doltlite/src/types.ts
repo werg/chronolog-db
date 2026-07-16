@@ -233,7 +233,19 @@ export interface MaterializerOptions {
   readonly executionManifest: ExecutionManifest
   readonly checkpointEvery?: number
   readonly retainCheckpoints?: number
+  /**
+   * Test and operator-diagnostic seam for reproducible process termination at
+   * durable publication boundaries. Production callers normally omit it.
+   */
+  readonly publicationFaultInjector?: (point: MaterializerPublicationFaultPoint) => void
 }
+
+export type MaterializerPublicationFaultPoint =
+  | 'after_candidate_commit'
+  | 'after_revision_ref_created'
+  | 'before_head_publish'
+  | 'after_head_publish'
+  | 'after_reader_swap'
 
 export interface StoredExecutionManifest {
   readonly manifestDigest: Uint8Array

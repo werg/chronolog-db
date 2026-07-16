@@ -36,6 +36,8 @@ The exact working/gated feature boundary is tracked in
 [implementation status](docs/implementation-status.md), and the ordered work
 queue is maintained in [upcoming work](upcoming.md). Container fault and
 load testing is documented in the [chaos testing guide](docs/chaos-testing.md).
+The first pilot targets the native daemon; the rationale and executable gate
+are documented in [production execution](docs/production-execution.md).
 
 This is a direct implementation with no legacy transaction decoder, schema
 migration path, state-merge fallback, or alternate SQLite backend. Development
@@ -217,7 +219,7 @@ keys from the daemon store remain release work.
 | `canonical` | Strict bounded CBOR, UTF-8, bytes, typed hash domains |
 | `ir` | Canonical logical-value and execution-manifest codecs |
 | `compiler-sqlite` | Deterministic SQL parsing, validation, and engine manifests |
-| `conformance` | Versioned SQLite differential corpus, native replay evidence, and portable platform reports |
+| `conformance` | Versioned SQLite differential corpus, direct/native-daemon replay equivalence, and portable platform reports |
 | `protocol` | Signed transaction/attestation messages and immutable order keys |
 | `capabilities` | Genesis, grants, revocations, policies, recovery |
 | `crypto` | HPKE, signed epochs, content encryption, key-store interfaces |
@@ -226,7 +228,7 @@ keys from the daemon store remain release work.
 | `materializer` | Portable exact-ref contracts, coordinator/query/publication interfaces, and differential fixtures |
 | `materializer-doltlite` | Profiled SQL execution, exact result/log storage, Dolt checkpoints, and suffix replay |
 | `migrations` | Checksummed application migrations, signed schema assumptions, catalog snapshots/diffs, and advisory bindings |
-| `runtime-workerd` | Named immutable-input controller, deterministic run/follow coordinator, differential adapter, and test-only real DoltLite replay fixture |
+| `runtime-workerd` | Experimental named immutable-input controller, run/follow contract, and crash-reconciling CAS publication seam |
 | `node-core` | Ingestion, validation, admission, encryption, orchestration |
 | `rpc` | Local service contract, in-process and HTTP transports |
 | `client` / `react` | Reactive client, transaction drafts, framework bindings |
@@ -245,19 +247,17 @@ recovered from Dolt branch refs, then verified against the protected log.
 
 The transport-neutral workerd adapter is implemented without Node, N-API, or
 SSB runtime imports. It validates named `previous`/`replayBase` refs and the
-engine/schema/execution tuple before invoking an injected database kernel,
-accepts only exact CAS reads, and keeps publication as a separate request
-value. A test-only composition now drives append and late-predecessor replay
-through that controller using two real pinned N-API DoltLite materializers and
-compares protected logs, revisions, outcomes, query results, and projected
-immutable identities. This is not Dolt merge or actual workerd execution: the
-host/kernel remain injected, and the fail-closed pure workerd JSG/DoltLite
-kernel, CAS exporter, and daemon cutover are not implemented yet.
+engine/execution tuple before invoking an injected database kernel, accepts
+only exact CAS reads, and keeps publication separate. Its CAS helper verifies
+immutable output reachability before a generation-guarded ref move and
+reconciles ambiguous failures by exact read. This is not actual workerd
+execution: the host/kernel and immutable exporter remain unimplemented.
 
-`node-core` now consumes portable materialization coordinator, immutable query,
+`node-core` consumes portable materialization coordinator, immutable query,
 and publication-store interfaces instead of the concrete DoltLite class. The
-shipped daemon composes those interfaces with the legacy DoltLite adapter, so
-its authority and branch-publication behavior are unchanged. RPC handlers
+shipped daemon composes those interfaces with the production-selected native
+DoltLite adapter. `pnpm conformance:production` requires that composition to
+match the direct native replay digest. RPC handlers
 similarly consume a narrow service contract rather than constructing or typing
 against `ChronologNode` directly.
 

@@ -67,6 +67,7 @@ import type {
   MaterializerCheckpointInfo,
   MaterializerSqlBackend,
   MaterializerOptions,
+  MaterializerPublicationFaultPoint,
   OutcomeChange,
   ObserveSqlOptions,
   RevisionSubscriber,
@@ -328,6 +329,7 @@ export class DeterministicMaterializer implements MaterializerSqlBackend {
       const commitHash = this.#writer.doltCommit(`chronolog revision ${nextRevision}`)
       const contentHash = this.#writer.doltHashOf(commitHash)
       if (contentHash !== this.#writer.doltHashOf()) throw new Error('MATERIALIZER_COMMIT_CONTENT_MISMATCH')
+      this.#publicationFault('after_candidate_commit')
 
       const retainedBeforeInsertion = this.#checkpoints.filter(
         (entry) => isAppend || entry.prefixLength <= difference,
@@ -338,6 +340,7 @@ export class DeterministicMaterializer implements MaterializerSqlBackend {
       const nextPublished = createRevisionRef(this.#writer, nextRevision, transactions.length, commitHash, candidateLog)
       revisionBranch = nextPublished.branchRef
       if (nextPublished.contentHash !== contentHash) throw new Error('MATERIALIZER_REVISION_CONTENT_MISMATCH')
+      this.#publicationFault('after_revision_ref_created')
 
       const candidateOpened = openDatabase(this.#sourceOptions)
       candidateReader = candidateOpened.database
@@ -350,8 +353,10 @@ export class DeterministicMaterializer implements MaterializerSqlBackend {
         throw new Error('MATERIALIZER_CANDIDATE_READER_CONTENT_MISMATCH')
       }
 
+      this.#publicationFault('before_head_publish')
       publishRef(this.#writer, nextPublished)
       publishedMoved = true
+      this.#publicationFault('after_head_publish')
 
       const oldReader = this.#reader
       this.#reader = candidateReader
@@ -360,6 +365,7 @@ export class DeterministicMaterializer implements MaterializerSqlBackend {
       this.#log = readerLog
       this.#order = transactions.map((transaction) => copyBytes(transaction.txId))
       oldReader.close()
+      this.#publicationFault('after_reader_swap')
 
       try {
         this.#writer.doltCheckout(HEAD_BRANCH)
@@ -509,6 +515,10 @@ export class DeterministicMaterializer implements MaterializerSqlBackend {
         )
       }
     }
+  }
+
+  #publicationFault(point: MaterializerPublicationFaultPoint): void {
+    this.#sourceOptions.publicationFaultInjector?.(point)
   }
 
   #checkpointAtOrBefore(prefixLength: number): MaterializerCheckpointInfo | null {

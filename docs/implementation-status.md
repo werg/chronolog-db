@@ -102,6 +102,14 @@ Threshold recovery replaces the root key and administration feed, revokes
 capabilities tied to the compromised root, and records any deliberate history
 reopening in settlement evidence.
 
+The first pilot deployment target is the native daemon. Its coordinator and
+publication adapter must match the direct native replay digest under
+`pnpm conformance:production`; process-level publication crashes are exercised
+on both sides of the atomic Dolt head move. The transport-neutral workerd/CAS
+contracts remain experimental and are not advertised by the active manifest.
+See [production execution](production-execution.md) for the decision and the
+criteria for reconsidering workerd.
+
 `CHRONOLOG_STATIC_MEMBERSHIP_FILE` is retained as an explicit legacy/testing
 override. Production key custody, packaging, and a polished operator CLI remain
 release-hardening work; the bootstrap recovery keys must not remain co-located
@@ -113,10 +121,10 @@ for a real deployment.
   the measured 3.53/3.54 compatibility boundary;
 - validation of the configured Linux/macOS portable replay digest comparison,
   plus deterministic resource characterization on release hardware;
-- crash injection at all publication lifecycle boundaries;
 - fuzzing, native sanitizers, signed distributions, OS-backed keystores, and
   external security review; and
-- production workerd kernel/CAS integration and daemon publication cutover.
+- feed-fork repair, trusted snapshots, blob manifests, NAT discovery,
+  deployment sizing, and production observability.
 
 The broader delivery criteria remain in the
 [conformance specification](implementation-specs/09-conformance-delivery.md),
@@ -126,6 +134,6 @@ and [transaction result specification](implementation-specs/11-transaction-resul
 ## Active roadmap
 
 The ordered implementation queue and acceptance criteria live in
-[`upcoming.md`](../upcoming.md). The next implementation tranche is
-deterministic SQL row-choice expansion. Historical relational-IR plans are kept
-for design context but are not the active transaction roadmap.
+[`upcoming.md`](../upcoming.md). The active tranche is release and operational
+hardening. Historical relational-IR plans are kept for design context but are
+not the active transaction roadmap.

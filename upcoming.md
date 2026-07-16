@@ -153,7 +153,7 @@ Acceptance:
 
 ## Project 9 — Production workerd/CAS execution path
 
-Status: in progress
+Status: complete
 
 - Decide and record whether the first deployment target is pure workerd or the
   native daemon.
@@ -165,13 +165,13 @@ Status: in progress
 
 Acceptance:
 
-- [ ] The selected production path runs the same conformance corpus and replay
+- [x] The selected production path runs the same conformance corpus and replay
       digests as the reference native path.
-- [ ] Publication and CAS failure boundaries are crash-tested.
+- [x] Publication and CAS failure boundaries are crash-tested.
 
 ## Project 10 — Release and operational hardening
 
-Status: pending
+Status: in progress
 
 - Add fuzzing, native sanitizers, crash injection at publication boundaries,
   long-running recovery/storage tests, and deterministic resource/performance

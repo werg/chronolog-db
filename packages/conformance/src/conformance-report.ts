@@ -10,6 +10,7 @@ import {
   createCoreExecutionManifest,
 } from '@chronolog/compiler-sqlite'
 import {
+  createDoltLiteMaterializationRuntime,
   DeterministicMaterializer,
   readNativeEngineInfo,
   type AdmittedTransaction,
@@ -78,10 +79,22 @@ export async function generateConformanceReport(options: ReportOptions = {}): Pr
     engineDigest: native.digest,
   })
   const manifestArtifacts = await compileManifestArtifacts(manifest)
-  const replay = await runReplayFixture(manifest)
+  const replay = await runReplayFixture(manifest, 'reference')
+  const productionReplay = await runReplayFixture(manifest, 'native-daemon')
+  if (productionReplay.replayDigest !== replay.replayDigest) {
+    throw new Error('CONFORMANCE_NATIVE_DAEMON_REPLAY_MISMATCH')
+  }
   const testGroups: readonly ConformanceTestGroup[] = [
     { id: 'sqlite-ledger-v1', passed: true, evidenceDigest: digestJson(sqlite) },
     { id: 'native-replay-v1', passed: true, evidenceDigest: replay.evidenceDigest },
+    {
+      id: 'native-daemon-production-v1',
+      passed: true,
+      evidenceDigest: digestJson({
+        reference: replay.evidenceDigest,
+        production: productionReplay.evidenceDigest,
+      }),
+    },
   ]
   const enabledFeatures = [
     'sql-core-v1',
@@ -89,11 +102,14 @@ export async function generateConformanceReport(options: ReportOptions = {}): Pr
     'sql-transaction-results-v1',
     'sql-json1-arrows-v1',
     'sql-trigger-raise-v1',
+    'deployment-native-daemon-v1',
   ] as const
   const featureEvidence = Object.fromEntries(enabledFeatures.map((feature) => [
     feature,
-    feature === 'sql-core-v1'
-      ? ['sqlite-ledger-v1', 'native-replay-v1']
+    feature === 'deployment-native-daemon-v1'
+      ? ['native-daemon-production-v1']
+      : feature === 'sql-core-v1'
+        ? ['sqlite-ledger-v1', 'native-replay-v1', 'native-daemon-production-v1']
       : feature === 'sql-json1-arrows-v1' || feature === 'sql-trigger-raise-v1'
         ? ['sqlite-ledger-v1']
         : ['native-replay-v1'],
@@ -171,7 +187,10 @@ export function assertConformanceReport(value: unknown): asserts value is Confor
   }
 }
 
-async function runReplayFixture(manifest: ReturnType<typeof createCoreExecutionManifest>): Promise<{
+async function runReplayFixture(
+  manifest: ReturnType<typeof createCoreExecutionManifest>,
+  pathKind: 'reference' | 'native-daemon',
+): Promise<{
   readonly evidenceDigest: string
   readonly replayDigest: string
 }> {
@@ -179,6 +198,9 @@ async function runReplayFixture(manifest: ReturnType<typeof createCoreExecutionM
   const path = join(directory, 'application.db')
   try {
     const materializer = await DeterministicMaterializer.open({ path, executionManifest: manifest, checkpointEvery: 1 })
+    const runtime = pathKind === 'native-daemon'
+      ? createDoltLiteMaterializationRuntime(materializer)
+      : null
     try {
       const digest = materializer.executionManifestDigest
       const bootstrap = await transaction(1n, 'bootstrap', {
@@ -196,8 +218,8 @@ async function runReplayFixture(manifest: ReturnType<typeof createCoreExecutionM
         preconditions: [truePrecondition()],
         body: [statement('UPDATE accounts SET balance = balance + 1 RETURNING id, balance ORDER BY id DESC LIMIT 1')],
       }, digest)
-      await materializer.materialize([bootstrap, later])
-      await materializer.materialize([bootstrap, predecessor, later, ordered])
+      await applyConformanceOrder(materializer, runtime, [bootstrap, later])
+      await applyConformanceOrder(materializer, runtime, [bootstrap, predecessor, later, ordered])
       const state = materializer.localSql('SELECT id, balance FROM accounts ORDER BY id')
       const evidence = {
         state: state.rows,
@@ -215,10 +237,28 @@ async function runReplayFixture(manifest: ReturnType<typeof createCoreExecutionM
       const replayDigest = digestJson(evidence)
       return { evidenceDigest: replayDigest, replayDigest }
     } finally {
-      materializer.close()
+      if (runtime === null) materializer.close()
+      else await runtime.close()
     }
   } finally {
     await rm(directory, { recursive: true, force: true })
+  }
+}
+
+async function applyConformanceOrder(
+  materializer: DeterministicMaterializer,
+  runtime: ReturnType<typeof createDoltLiteMaterializationRuntime> | null,
+  transactions: readonly AdmittedTransaction[],
+): Promise<void> {
+  if (runtime === null) {
+    await materializer.materialize(transactions)
+    return
+  }
+  const prepared = await runtime.coordinator.materialize(transactions)
+  if (prepared === null) throw new Error('CONFORMANCE_NATIVE_DAEMON_REVISION_MISSING')
+  const publication = await runtime.publications.publish(prepared.publication)
+  if (publication.status !== 'already_current') {
+    throw new Error('CONFORMANCE_NATIVE_DAEMON_PUBLICATION_INVALID')
   }
 }
 
@@ -314,6 +354,11 @@ function outputArgument(arguments_: readonly string[]): string | undefined {
 
 async function main(): Promise<void> {
   const report = await generateConformanceReport()
+  for (const feature of requiredFeatureArguments(process.argv.slice(2))) {
+    if (!report.deterministic.enabledFeatures.includes(feature)) {
+      throw new Error(`CONFORMANCE_REQUIRED_FEATURE_MISSING:${feature}`)
+    }
+  }
   const serialized = `${JSON.stringify(report, null, 2)}\n`
   const output = outputArgument(process.argv.slice(2))
   if (output !== undefined) {
@@ -321,6 +366,20 @@ async function main(): Promise<void> {
     await writeFile(output, serialized, 'utf8')
   }
   process.stdout.write(serialized)
+}
+
+function requiredFeatureArguments(arguments_: readonly string[]): readonly string[] {
+  const result: string[] = []
+  for (let index = 0; index < arguments_.length; index += 1) {
+    if (arguments_[index] !== '--require-feature') continue
+    const feature = arguments_[index + 1]
+    if (feature === undefined || feature.startsWith('-')) {
+      throw new Error('CONFORMANCE_REQUIRED_FEATURE_ARGUMENT_MISSING')
+    }
+    result.push(feature)
+    index += 1
+  }
+  return result
 }
 
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) await main()

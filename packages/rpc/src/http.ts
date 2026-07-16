@@ -55,6 +55,8 @@ export interface HttpRpcServerOptions {
   readonly maxBodyBytes?: number
   /** Maximum wait for graceful connection drain before sockets are destroyed. */
   readonly shutdownTimeoutMs?: number
+  readonly health?: () => object | Promise<object>
+  readonly metrics?: () => string | Promise<string>
 }
 
 export interface HttpRpcServerAddress {
@@ -132,8 +134,17 @@ export class HttpRpcServer {
   async #handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     if (this.#closing) throw new ChronologRpcError('transport_unavailable', 'RPC server is shutting down', { retryable: true })
     if (request.method === 'GET' && request.url === '/health') {
-      response.writeHead(200, { 'content-type': 'application/json' })
-      response.end('{"ok":true}')
+      const health = this.#options.health === undefined ? { ok: true } : await this.#options.health()
+      const healthy = typeof health !== 'object' || health === null ||
+        !('ok' in health) || (health as { readonly ok?: unknown }).ok !== false
+      response.writeHead(healthy ? 200 : 503, { 'content-type': 'application/json' })
+      response.end(encodeJson(health))
+      return
+    }
+    if (request.method === 'GET' && request.url === '/metrics' && this.#options.metrics !== undefined) {
+      this.#authorize(request)
+      response.writeHead(200, { 'content-type': 'text/plain; version=0.0.4; charset=utf-8' })
+      response.end(await this.#options.metrics())
       return
     }
     if (request.method !== 'POST' || request.url === undefined) throw new ChronologRpcError('not_found', 'RPC route not found')

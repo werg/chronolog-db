@@ -280,6 +280,6 @@ export interface StreamSettlementEvidenceRequest extends GetSettlementEvidenceRe
 export interface ValidatorWatermark { readonly groupId: GroupId; readonly revision: Revision; readonly policyId: string; readonly membershipRevision: string; readonly timestamp?: string; readonly supportingValidators: readonly string[]; readonly blockedBy: readonly string[] }
 export interface GetValidatorWatermarkRequest { readonly groupId: GroupId; readonly requestId: RequestId }
 export type ReplicationState = 'offline' | 'connecting' | 'syncing' | 'current' | 'degraded'
-export interface ReplicationStatus { readonly groupId: GroupId; readonly revision: Revision; readonly connectedPeers: number; readonly knownPeers: number; readonly feedsWithGaps: number; readonly pendingPayloads: number; readonly ingestionBacklog: number; readonly materializationPending: boolean; readonly state: ReplicationState }
+export interface ReplicationStatus { readonly groupId: GroupId; readonly revision: Revision; readonly connectedPeers: number; readonly knownPeers: number; readonly feedsWithGaps: number; readonly quarantinedFeeds: readonly string[]; readonly pendingPayloads: number; readonly ingestionBacklog: number; readonly materializationPending: boolean; readonly state: ReplicationState }
 export interface GetReplicationStatusRequest { readonly groupId: GroupId; readonly requestId: RequestId }
 export interface StreamReplicationStatusRequest extends GetReplicationStatusRequest { readonly resumeAfterEventSetRevision?: Revision }

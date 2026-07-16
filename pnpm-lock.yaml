@@ -272,6 +272,9 @@ importers:
 
   packages/node-core:
     dependencies:
+      '@chronolog/canonical':
+        specifier: workspace:*
+        version: link:../canonical
       '@chronolog/capabilities':
         specifier: workspace:*
         version: link:../capabilities

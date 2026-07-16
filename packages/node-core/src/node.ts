@@ -47,6 +47,7 @@ import type {
   ReservedTransactionContext,
 } from './types.js'
 import { decodeSignedEnvelope, encodeSignedEnvelope } from './wire.js'
+import { FeedForkRegistry } from './feed-forks.js'
 
 export class ChronologNode {
   readonly #options: ChronologNodeOptions
@@ -56,6 +57,7 @@ export class ChronologNode {
   readonly #seen = new Set<string>()
   readonly #retryRecords = new Map<string, TransportRecord>()
   readonly #maximumRetryRecords: number
+  readonly #feedForks: FeedForkRegistry
   #retryOverflow = false
   readonly #candidateCores = new Map<string, TransactionCore>()
   readonly #replayedOutcomes = new Set<string>()
@@ -79,6 +81,7 @@ export class ChronologNode {
     this.#options = options
     this.#control = options.controlStore ?? new ControlStore()
     this.#maximumRetryRecords = options.maximumRetryRecords ?? 4_096
+    this.#feedForks = options.feedForkRegistry ?? new FeedForkRegistry()
     if (!Number.isSafeInteger(this.#maximumRetryRecords) || this.#maximumRetryRecords < 1) {
       throw new RangeError('NODE_INVALID_RETRY_CAPACITY')
     }
@@ -199,7 +202,7 @@ export class ChronologNode {
     )) throw new Error('LOCAL_TRANSPORT_AUTHOR_UNAUTHORIZED')
     const canonical = encodeTransactionCore(core)
     const candidateDigest = await transactionDigest(canonical)
-    const envelope = await encodeSignedEnvelope(this.#groupRoute(), 'candidate', canonical, this.#options.identity, this.#options.envelopeCipher)
+    const envelope = await encodeSignedEnvelope(this.#groupRoute(), 'candidate', canonical, this.#options.identity, this.#options.envelopeCipher, this.#options.blobPayloads)
     const record = await this.#options.transport.publish(envelope, { timestampMs: Number(authorTimestampMs) })
     await this.ingest(record)
     return { txId: utf8(record.id), txIdText: record.id, candidateDigest, core }
@@ -239,7 +242,7 @@ export class ChronologNode {
       acceptanceCutoffMs: this.#acceptedAboveMs,
     }
     const payload = encodeValidatorHeartbeat(heartbeat)
-    const envelope = await encodeSignedEnvelope(this.#groupRoute(), 'heartbeat', payload, this.#options.identity, this.#options.envelopeCipher)
+    const envelope = await encodeSignedEnvelope(this.#groupRoute(), 'heartbeat', payload, this.#options.identity, this.#options.envelopeCipher, this.#options.blobPayloads)
     const record = await this.#options.transport.publish(envelope, { timestampMs: now })
     await this.ingest(record)
   }
@@ -248,6 +251,12 @@ export class ChronologNode {
     await this.#mutex.run(async () => {
       if (this.#seen.has(record.id)) return
       try {
+        if (this.#feedForks.observe(record) === 'quarantined') {
+          const error = new Error(`FEED_FORK_QUARANTINED:${record.author}`)
+          this.#seen.add(record.id)
+          this.#recordError(error)
+          return
+        }
         const envelope = decodeEnvelope(record.payload)
         if (envelope.messageType !== 'candidate' && envelope.messageType !== 'attestation' && envelope.messageType !== 'heartbeat') {
           this.#seen.add(record.id)
@@ -366,12 +375,14 @@ export class ChronologNode {
       executionManifestDigest: this.executionManifestDigest,
       validating: this.#options.validator !== undefined,
       transport: await this.#options.transport.status(),
+      quarantinedFeeds: this.#feedForks.quarantineEvidence().map((item) => item.feedId),
       ...(error === undefined ? {} : { lastError: error.message }),
     }
     return status
   }
 
   async isWritable(): Promise<boolean> {
+    if (this.#feedForks.quarantined()) return false
     return this.#options.membership.canWrite({
       groupId: this.#options.groupId,
       membershipRevision: this.membershipRevision,
@@ -502,7 +513,7 @@ export class ChronologNode {
       policyVersion,
     }
     const payload = encodeValidatorAttestation(attestation)
-    const envelope = await encodeSignedEnvelope(this.#groupRoute(), 'attestation', payload, this.#options.identity, this.#options.envelopeCipher)
+    const envelope = await encodeSignedEnvelope(this.#groupRoute(), 'attestation', payload, this.#options.identity, this.#options.envelopeCipher, this.#options.blobPayloads)
     // Publishing before returning is the validator durability rule. The newly
     // appended record is handled by the normal subscription path.
     await this.#options.transport.publish(envelope, { timestampMs: now })
@@ -781,7 +792,7 @@ export class ChronologNode {
   #clockNow(): number { return this.#options.clock?.now() ?? Date.now() }
   async #decodeRecord(record: TransportRecord): Promise<Awaited<ReturnType<typeof decodeSignedEnvelope>>> {
     try {
-      return await decodeSignedEnvelope(record.payload, this.#groupRoute(), this.#options.envelopeCipher)
+      return await decodeSignedEnvelope(record.payload, this.#groupRoute(), this.#options.envelopeCipher, this.#options.blobPayloads?.store)
     } catch (error) {
       throw new TerminalIngestError('INVALID_SIGNED_ENVELOPE', { cause: error })
     }
@@ -813,7 +824,7 @@ export class ChronologNode {
     for (const record of history) {
       if (record.author !== this.#options.transport.identity) continue
       try {
-        const wire = await decodeSignedEnvelope(record.payload, this.#groupRoute(), this.#options.envelopeCipher)
+        const wire = await decodeSignedEnvelope(record.payload, this.#groupRoute(), this.#options.envelopeCipher, this.#options.blobPayloads?.store)
         if (!equalBytes(wire.signer, this.identity)) continue
         if (wire.type === 'attestation') {
           const attestation = decodeValidatorAttestation(wire.payload)
@@ -980,6 +991,7 @@ export class ChronologNode {
   #assertReady(): void {
     if (!this.#started) throw new Error('NODE_NOT_STARTED')
     if (this.#closed) throw new Error('NODE_CLOSED')
+    if (this.#feedForks.quarantined()) throw new Error('NODE_FEED_FORK_QUARANTINED')
   }
 }
 

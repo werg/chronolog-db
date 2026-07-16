@@ -12,6 +12,8 @@ import {
   CapabilityMembershipResolver,
   ChronologNode,
   GovernanceControlPlane,
+  FeedForkRegistry,
+  JsonFeedForkPersistence,
   createEpochEnvelopeCipher,
   type MembershipResolver,
 } from '@chronolog/node-core'
@@ -22,6 +24,8 @@ import { SsbDb2Transport, type SsbPeer } from '@chronolog/transport-ssb'
 import { fromBase64, loadOrCreateConfig, parseDaemonRuntimeConfig } from './config.js'
 import { loadOrCreateGovernanceBootstrap } from './governance-config.js'
 import { loadStaticMembership } from './static-membership.js'
+import { discoverPublicSsbAddress } from './nat-discovery.js'
+import { daemonHealth, prometheusMetrics } from './observability.js'
 import { daemonSecretStoreFromEnvironment } from './secret-store.js'
 
 const dataDirectory = resolve(process.env.CHRONOLOG_DATA_DIR ?? '.chronolog')
@@ -39,14 +43,19 @@ const executionManifest = createCoreExecutionManifest({
   profile: 'chronolog-core-portable',
   engineDigest: nativeEngine.digest,
 })
-const { transport, materializer, node, server, address, governance } = await startRuntime()
+const { transport, materializer, node, server, address, governance, nat } = await startRuntime()
 process.stdout.write(`${JSON.stringify({
   event: 'chronologd.ready',
   url: address.url,
+  healthUrl: `${address.url}/health`,
+  metricsUrl: `${address.url}/metrics`,
   groupId: Buffer.from(groupId).toString('base64url'),
   nodeId: Buffer.from(identity.publicKeyBytes).toString('base64url'),
   ssbId: transport.identity,
   ssbAddress: transport.address(runtime.ssbScope),
+  publicSsbAddress: nat.address,
+  publicSsbAddressSource: nat.source,
+  natDiscoveryError: nat.error ?? null,
   materializer: materializer.backend,
   executionManifestDigest: Buffer.from(materializer.executionManifestDigest).toString('base64url'),
   membershipRevision: Buffer.from(node.membershipRevision).toString('base64url'),
@@ -187,6 +196,9 @@ async function startRuntime() {
         heartbeatIntervalMs: runtime.heartbeatIntervalMs,
       },
       envelopeCipher: governance?.cipherRing ?? envelopeCipher,
+      feedForkRegistry: new FeedForkRegistry(
+        new JsonFeedForkPersistence(join(dataDirectory, 'feed-continuity.json')),
+      ),
     })
     await node.start()
     server = new HttpRpcServer({
@@ -194,9 +206,16 @@ async function startRuntime() {
       host: runtime.host,
       port: runtime.port,
       ...(runtime.token === undefined ? {} : { token: runtime.token }),
+      health: async () => daemonHealth(await node!.status(), stopping),
+      metrics: async () => prometheusMetrics(await node!.status()),
     })
     const address = await server.listen()
-    return { transport, materializer, node, server, address, governance }
+    const nat = await discoverPublicSsbAddress({
+      timeoutMs: runtime.natDiscoveryTimeoutMs,
+      ...(runtime.publicSsbAddress === undefined ? {} : { explicitAddress: runtime.publicSsbAddress }),
+      ...(runtime.natDiscoveryUrl === undefined ? {} : { discoveryUrl: runtime.natDiscoveryUrl }),
+    })
+    return { transport, materializer, node, server, address, governance, nat }
   } catch (error) {
     await server?.close().catch(() => undefined)
     await governance?.close().catch(() => undefined)

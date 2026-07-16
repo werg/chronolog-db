@@ -53,6 +53,9 @@ export interface DaemonRuntimeConfig {
   readonly cutoffLagMs: number
   readonly maxFutureSkewMs: number
   readonly heartbeatIntervalMs: number
+  readonly publicSsbAddress?: string
+  readonly natDiscoveryUrl?: string
+  readonly natDiscoveryTimeoutMs: number
 }
 
 export function parseDaemonRuntimeConfig(environment: NodeJS.ProcessEnv): DaemonRuntimeConfig {
@@ -78,6 +81,13 @@ export function parseDaemonRuntimeConfig(environment: NodeJS.ProcessEnv): Daemon
     cutoffLagMs: integer(environment.CHRONOLOG_CUTOFF_LAG_MS ?? '60000', 0, Number.MAX_SAFE_INTEGER, 'CHRONOLOG_CUTOFF_LAG_MS'),
     maxFutureSkewMs: integer(environment.CHRONOLOG_MAX_FUTURE_SKEW_MS ?? '30000', 0, Number.MAX_SAFE_INTEGER, 'CHRONOLOG_MAX_FUTURE_SKEW_MS'),
     heartbeatIntervalMs: integer(environment.CHRONOLOG_HEARTBEAT_INTERVAL_MS ?? '30000', 1, Number.MAX_SAFE_INTEGER, 'CHRONOLOG_HEARTBEAT_INTERVAL_MS'),
+    ...(environment.CHRONOLOG_PUBLIC_SSB_ADDRESS === undefined ? {} : {
+      publicSsbAddress: nonempty(environment.CHRONOLOG_PUBLIC_SSB_ADDRESS, 'CHRONOLOG_PUBLIC_SSB_ADDRESS'),
+    }),
+    ...(environment.CHRONOLOG_NAT_DISCOVERY_URL === undefined ? {} : {
+      natDiscoveryUrl: validUrl(environment.CHRONOLOG_NAT_DISCOVERY_URL, 'CHRONOLOG_NAT_DISCOVERY_URL'),
+    }),
+    natDiscoveryTimeoutMs: integer(environment.CHRONOLOG_NAT_DISCOVERY_TIMEOUT_MS ?? '3000', 1, 60_000, 'CHRONOLOG_NAT_DISCOVERY_TIMEOUT_MS'),
   }
 }
 
@@ -288,6 +298,15 @@ function integer(value: string, minimum: number, maximum: number, field: string)
 function nonempty(value: string, field: string): string {
   if (value.length === 0) throw new Error(`${field}_INVALID`)
   return value
+}
+
+function validUrl(value: string, field: string): string {
+  let url: URL
+  try { url = new URL(value) } catch { throw new Error(`${field}_INVALID`) }
+  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && isLoopbackHost(url.hostname))) {
+    throw new Error(`${field}_INVALID`)
+  }
+  return url.href
 }
 
 function isLoopbackHost(host: string): boolean {

@@ -62,6 +62,7 @@ export interface RpcNodeStatusSnapshot {
   readonly validating: boolean
   readonly processedTransportRecords: number
   readonly materializationPending: boolean
+  readonly quarantinedFeeds: readonly string[]
   readonly lastError?: string
   readonly transport: {
     readonly records: number

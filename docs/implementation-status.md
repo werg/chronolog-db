@@ -121,6 +121,13 @@ private material into Secret Service references and fails closed on missing
 custody. This removes secrets from daemon JSON but does not turn three shares
 held by one OS account into an independent recovery quorum.
 
+Feed author/sequence/previous conflicts are persisted and quarantine the node;
+quarantined nodes report degraded, refuse new publication, and expose bounded
+Prometheus metrics. Signed snapshot manifests and content-addressed envelope
+blob stores have exact verification primitives, but snapshot replacement and
+inter-node blob fetching are not enabled. Optional public SSB address discovery
+uses only an explicitly configured address or bounded HTTPS discovery service.
+
 ## Release gates outside this prototype
 
 - exact SQLite 3.54 parser synchronization, or continued executable proof of
@@ -129,8 +136,11 @@ held by one OS account into an independent recovery quorum.
   plus deterministic resource characterization on release hardware;
 - signed installable distributions, non-Linux/hardware-backed key providers,
   and external security review; and
-- feed-fork repair, trusted snapshots, blob manifests, NAT discovery,
-  deployment sizing, and production observability.
+- trusted snapshot archive/replacement and full feed-fork rebuild, inter-node
+  blob fetching, verified NAT traversal, and pilot sizing/runbooks.
+
+The current internal authorizer/protocol assessment and unresolved release
+findings are recorded in [the threat review](security-threat-review.md).
 
 The broader delivery criteria remain in the
 [conformance specification](implementation-specs/09-conformance-delivery.md),

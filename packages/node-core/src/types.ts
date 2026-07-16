@@ -12,6 +12,8 @@ import type {
   TransactionCore,
 } from '@chronolog/protocol'
 import type { ChronologTransport, TransportStatus } from '@chronolog/transport-ssb'
+import type { FeedForkRegistry } from './feed-forks.js'
+import type { EnvelopeBlobOptions } from './blobs.js'
 
 export interface Clock {
   now(): number
@@ -119,6 +121,8 @@ export interface ChronologNodeOptions {
   readonly envelopeCipher?: EnvelopeCipher | EnvelopeCipherResolver
   /** Maximum transiently failed records retained before history-backed recovery takes over. */
   readonly maximumRetryRecords?: number
+  readonly feedForkRegistry?: FeedForkRegistry
+  readonly blobPayloads?: EnvelopeBlobOptions
 }
 
 export interface PublishTransactionInput {
@@ -163,6 +167,7 @@ export interface NodeStatus {
   readonly validating: boolean
   readonly lastError?: string
   readonly transport: TransportStatus
+  readonly quarantinedFeeds: readonly string[]
 }
 
 export type NodeObservationResult = MaterializedObservationResult

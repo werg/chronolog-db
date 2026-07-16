@@ -200,5 +200,14 @@ Progress:
       Linux/macOS release evidence.
 - [x] Linux Secret Service migration for daemon, epoch, recipient, and
       bootstrap recovery private material.
-- [ ] Packaging, key custody, operational repair/import/networking, threat
-      review, and external assessment.
+- [x] Persistent feed-fork quarantine, degraded/non-writable behavior, and
+      complete-prefix repair validation.
+- [x] Signed anti-rollback snapshot manifests and verified local blob-manifest
+      storage/wire resolution (archive import and remote fetch remain gated).
+- [x] Detailed health, authenticated Prometheus metrics, and bounded explicit
+      public-address discovery.
+- [x] Internal authorizer/protocol threat review with unresolved release
+      findings recorded.
+- [ ] Installable packaging/upgrades, independent key custody, snapshot-backed
+      repair/import, remote blob fetch, verified traversal, pilot runbooks, and
+      external assessment.

@@ -5,6 +5,7 @@
   "type": "module",
   "exports": "./src/index.ts",
   "dependencies": {
+    "@chronolog/canonical": "workspace:*",
     "@chronolog/capabilities": "workspace:*",
     "@chronolog/compiler-sqlite": "workspace:*",
     "@chronolog/control-store": "workspace:*",

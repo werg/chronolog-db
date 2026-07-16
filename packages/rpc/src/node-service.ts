@@ -176,7 +176,11 @@ export class NodeRpcService implements ChronologRpcService {
     const status = await this.#node.status()
     return {
       apiVersion: RPC_API_VERSION,
-      state: !status.started ? 'starting' : status.lastError === undefined ? 'ready' : 'degraded',
+      state: !status.started
+        ? 'starting'
+        : status.lastError === undefined && status.quarantinedFeeds.length === 0
+          ? 'ready'
+          : 'degraded',
       nodeId: toBase64Url(this.#node.identity),
       revision: this.#revision(status.materializedRevision, status.orderLength),
       writable: await this.#node.isWritable(),
@@ -666,10 +670,11 @@ export class NodeRpcService implements ChronologRpcService {
       connectedPeers: status.transport.peers.length,
       knownPeers,
       feedsWithGaps,
+      quarantinedFeeds: [...status.quarantinedFeeds],
       pendingPayloads,
       ingestionBacklog,
       materializationPending: status.materializationPending,
-      state: status.lastError !== undefined || status.transport.lastCatchUpError !== undefined
+      state: status.lastError !== undefined || status.transport.lastCatchUpError !== undefined || status.quarantinedFeeds.length > 0
         ? 'degraded'
         : ingestionBacklog > 0 || feedsWithGaps > 0 || pendingPayloads > 0 || status.materializationPending
           ? 'syncing'

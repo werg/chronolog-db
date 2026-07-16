@@ -77,5 +77,9 @@ describe('daemon configuration', () => {
       host: '0.0.0.0', token: 'secret',
     })
     expect(() => parseDaemonRuntimeConfig({ CHRONOLOG_TOKEN: '' })).toThrow('CHRONOLOG_TOKEN_INVALID')
+    expect(() => parseDaemonRuntimeConfig({ CHRONOLOG_NAT_DISCOVERY_URL: 'http://public.example/address' }))
+      .toThrow('CHRONOLOG_NAT_DISCOVERY_URL_INVALID')
+    expect(parseDaemonRuntimeConfig({ CHRONOLOG_NAT_DISCOVERY_URL: 'https://public.example/address' }))
+      .toMatchObject({ natDiscoveryUrl: 'https://public.example/address' })
   })
 })

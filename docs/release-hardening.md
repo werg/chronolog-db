@@ -81,6 +81,29 @@ of JSON and into the host Secret Service. See the governance guide for host
 requirements, migration behavior, and the remaining requirement to separate
 recovery shares across custodians.
 
+## Network and observability
+
+`/health` returns readiness/replay/degraded state and uses HTTP 503 for feed
+gaps, quarantines, or node errors. `/metrics` emits bounded label-free
+Prometheus metrics and requires the configured bearer token. It covers
+materialized revision, order/candidate/admission counts, replay pending state,
+feed gaps/quarantines, transport records, RSS, and heap use.
+
+Set `CHRONOLOG_PUBLIC_SSB_ADDRESS` for an operator-verified public multiserver
+address, or configure an HTTPS `CHRONOLOG_NAT_DISCOVERY_URL` that returns
+`{"address":"net:host:port~shs:key"}`. Discovery is bounded and non-fatal. It
+does not create a router mapping or prove inbound reachability.
+
+Every consumed feed is checked by author, sequence, record ID, and previous
+link. A conflict is persisted to `feed-continuity.json`, makes the node
+non-writable, and appears in status/metrics. The repair primitive accepts only
+a complete prefix ending at an explicitly trusted head, but operators must not
+apply it until the trusted snapshot/full derived-state rebuild workflow lands.
+
+Signed snapshot manifests and content-addressed blob stores now provide exact
+trust/anti-rollback and chunk-integrity boundaries. Snapshot archive staging
+and cross-node blob fetching remain disabled release gates.
+
 ## Outstanding release gates
 
 - signed, platform-specific installation artifacts and verified upgrade paths
@@ -90,7 +113,8 @@ recovery shares across custodians.
 - feed-fork quarantine/repair, trusted snapshot import/export, and large-payload
   blob manifests;
 - NAT discovery, sizing envelopes, alertable observability, and runbooks;
-- authorizer/protocol threat review with every finding resolved or accepted;
+- resolution or explicit acceptance of every finding in the
+  [internal threat review](security-threat-review.md);
 - an independent external security review of the release candidate.
 
 The active manifest must never advertise one of these operational capabilities

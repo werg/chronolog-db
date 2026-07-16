@@ -20,6 +20,30 @@ async function openStatusStream(url: string): Promise<Response> {
 }
 
 describe('HttpRpcServer lifecycle', () => {
+  it('serves detailed health and authenticated Prometheus metrics', async () => {
+    const server = new HttpRpcServer({
+      service: {} as ChronologRpcService,
+      port: 0,
+      token: 'metrics-secret',
+      health: () => ({ ok: false, state: 'degraded' }),
+      metrics: () => 'chronolog_up 0\n',
+    })
+    const address = await server.listen()
+    try {
+      const health = await fetch(`${address.url}/health`)
+      expect(health.status).toBe(503)
+      await expect(health.json()).resolves.toEqual({ ok: false, state: 'degraded' })
+      expect((await fetch(`${address.url}/metrics`)).status).toBe(401)
+      const metrics = await fetch(`${address.url}/metrics`, {
+        headers: { authorization: 'Bearer metrics-secret' },
+      })
+      expect(metrics.status).toBe(200)
+      await expect(metrics.text()).resolves.toBe('chronolog_up 0\n')
+    } finally {
+      await server.close()
+    }
+  })
+
   it('aborts active streams before waiting for graceful shutdown', async () => {
     let aborted = false
     const service = serviceWithStatusStream(async function* (context) {

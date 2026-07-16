@@ -152,6 +152,12 @@ CHRONOLOG_SSB_PEERS='[{"address":"net:host:8008~shs:PUBLIC_KEY","feedId":"@FEED.
 pnpm dev
 ```
 
+For public discovery, set an operator-verified
+`CHRONOLOG_PUBLIC_SSB_ADDRESS`, or point `CHRONOLOG_NAT_DISCOVERY_URL` at a
+trusted HTTPS service returning one JSON multiserver address. The ready event
+reports the source or failure. This discovers an address; it does not configure
+router port forwarding.
+
 Only configured feed IDs are requested through EBT. SSB authenticates the
 connection and feed, while Chronolog independently verifies the inner protocol
 signature, capability revision, validation policy, group route, epoch, and
@@ -282,8 +288,7 @@ for the native-versus-consensus boundary.
 Before production use, the remaining work is operational hardening: a reviewed
 and signed distribution of the small DoltLite authorizer shim, non-Linux and
 hardware-backed key providers,
-capability and epoch administration commands in the daemon, blob manifests for
-large payloads, feed-fork quarantine and repair, NAT discovery,
-deployment-specific resource sizing, cross-platform CI, and external security
-review. The
+capability and epoch administration commands in the daemon, remote blob fetch,
+trusted snapshot replacement and full fork repair, verified NAT traversal,
+deployment-specific resource sizing, and external security review. The
 implementation plan retains the full acceptance criteria for those items.

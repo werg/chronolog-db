@@ -151,6 +151,67 @@ describe('SQL-first DoltLite materialization', () => {
     materializer.close()
   })
 
+  it('canonicalizes representative-stable aggregates, compounds, and peer windows across replay', async () => {
+    const { path, manifest } = await fixture()
+    let materializer = await DeterministicMaterializer.open({ path, executionManifest: manifest, checkpointEvery: 1 })
+    const aggregate = await transaction(1n, 'aggregate-representatives', {
+      version: 1,
+      preconditions: [truePrecondition()],
+      body: [
+        statement('CREATE TABLE aggregate_values (value)'),
+        statement("INSERT INTO aggregate_values VALUES (NULL), (NULL), (1), (1.0), ('a'), ('a'), ('A')"),
+        statement('SELECT DISTINCT typeof(value) AS storage_type FROM aggregate_values'),
+        statement('SELECT typeof(value) AS storage_type, count(*) AS total FROM aggregate_values GROUP BY typeof(value)'),
+        statement('SELECT min(typeof(value)) AS minimum_type, max(typeof(value)) AS maximum_type FROM aggregate_values'),
+        statement('SELECT typeof(value) AS storage_type FROM aggregate_values UNION SELECT typeof(value) FROM aggregate_values'),
+        statement('SELECT rank() OVER (ORDER BY typeof(value)) AS peer_rank, typeof(value) AS storage_type FROM aggregate_values'),
+        statement('SELECT dense_rank() OVER (ORDER BY typeof(value)) AS peer_rank, typeof(value) AS storage_type FROM aggregate_values'),
+        statement('SELECT group_concat(CAST(value AS TEXT) ORDER BY CAST(value AS TEXT)) AS joined FROM aggregate_values'),
+      ],
+    }, materializer.executionManifestDigest)
+    await materializer.materialize([aggregate])
+    expect(materializer.outcome(aggregate.txId)?.outcome).toBe('accepted')
+    const results = materializer.transactionResult(aggregate.txId)!.statements
+    expect(results[2]?.result?.rows.map((row) => canonicalText(row[0]!)).sort()).toEqual([
+      'integer', 'null', 'real', 'text',
+    ])
+    expect(Object.fromEntries(results[3]!.result!.rows.map((row) => [
+      canonicalText(row[0]!), canonicalInteger(row[1]!),
+    ]))).toEqual({ integer: 1n, null: 2n, real: 1n, text: 3n })
+    expect(results[4]?.result?.rows).toEqual([[
+      { kind: 'text', utf8: utf8('integer') },
+      { kind: 'text', utf8: utf8('text') },
+    ]])
+    expect(results[5]?.result?.rows).toEqual(results[2]?.result?.rows)
+    expect(results[6]?.result?.rows).toEqual([
+      [{ kind: 'integer', value: 1n }, { kind: 'text', utf8: utf8('integer') }],
+      [{ kind: 'integer', value: 2n }, { kind: 'text', utf8: utf8('null') }],
+      [{ kind: 'integer', value: 2n }, { kind: 'text', utf8: utf8('null') }],
+      [{ kind: 'integer', value: 4n }, { kind: 'text', utf8: utf8('real') }],
+      [{ kind: 'integer', value: 5n }, { kind: 'text', utf8: utf8('text') }],
+      [{ kind: 'integer', value: 5n }, { kind: 'text', utf8: utf8('text') }],
+      [{ kind: 'integer', value: 5n }, { kind: 'text', utf8: utf8('text') }],
+    ])
+    expect(results[7]?.result?.rows).toEqual([
+      [{ kind: 'integer', value: 1n }, { kind: 'text', utf8: utf8('integer') }],
+      [{ kind: 'integer', value: 2n }, { kind: 'text', utf8: utf8('null') }],
+      [{ kind: 'integer', value: 2n }, { kind: 'text', utf8: utf8('null') }],
+      [{ kind: 'integer', value: 3n }, { kind: 'text', utf8: utf8('real') }],
+      [{ kind: 'integer', value: 4n }, { kind: 'text', utf8: utf8('text') }],
+      [{ kind: 'integer', value: 4n }, { kind: 'text', utf8: utf8('text') }],
+      [{ kind: 'integer', value: 4n }, { kind: 'text', utf8: utf8('text') }],
+    ])
+    expect(results[8]?.result?.rows).toEqual([[
+      { kind: 'text', utf8: utf8('1,1.0,A,a,a') },
+    ]])
+    const envelope = materializer.transactionResult(aggregate.txId)
+    materializer.close()
+
+    materializer = await DeterministicMaterializer.open({ path, executionManifest: manifest, checkpointEvery: 1 })
+    expect(materializer.transactionResult(aggregate.txId)).toEqual(envelope)
+    materializer.close()
+  })
+
   it('rolls back schema and data on deterministic rejection and replays late predecessors', async () => {
     const { path, manifest } = await fixture()
     const materializer = await DeterministicMaterializer.open({ path, executionManifest: manifest, checkpointEvery: 1 })
@@ -418,3 +479,13 @@ async function transaction(
   }
 }
 function bytes32(seed: number): Uint8Array { return Uint8Array.from({ length: 32 }, (_value, index) => (seed + index) & 0xff) }
+
+function canonicalText(value: { readonly kind: string }): string {
+  if (value.kind !== 'text' || !('utf8' in value) || !(value.utf8 instanceof Uint8Array)) throw new Error('expected canonical text')
+  return new TextDecoder().decode(value.utf8)
+}
+
+function canonicalInteger(value: { readonly kind: string }): bigint {
+  if (value.kind !== 'integer' || !('value' in value) || typeof value.value !== 'bigint') throw new Error('expected canonical integer')
+  return value.value
+}

@@ -61,6 +61,9 @@ The compiler currently admits ordinary `SELECT`, values-based `INSERT`,
 also admits scalar subqueries, unordered/nested `LIMIT`, `INSERT ... SELECT`,
 `CREATE TABLE ... AS SELECT`, and `UPDATE ... FROM` when a syntactic
 at-most-one-row proof removes every row choice; broader forms fail closed.
+Representative-stable `DISTINCT`, grouping, distinct compounds, `MIN`/`MAX`,
+peer-stable `rank`/`dense_rank`, and value-completed ordered `group_concat`
+have similarly explicit structural proofs.
 Ordered results require an authored outer `ORDER BY`; the executor completes
 ties with canonical returned-column keys. Unordered results are canonicalized
 as tagged row sets or multisets. All authored statements are recompiled by the
@@ -73,9 +76,9 @@ determinism/conformance work:
   is executable through `pnpm conformance:sqlite`);
 - catalog-dependent scalar-subquery uniqueness and multirow nested/unordered
   `LIMIT` choices;
-- `DISTINCT`, `GROUP BY`, distinct compounds, aggregate `MIN`/`MAX`, windows,
-  and ordered/order-sensitive aggregates requiring canonical representative or
-  peer selection;
+- representative-sensitive `DISTINCT`, grouping, compounds, and `MIN`/`MAX`;
+  peer-sensitive windows such as `row_number`, `ntile`, `lag`, and `lead`; and
+  floating or incompletely ordered aggregates;
 - multirow `INSERT ... SELECT`, `CREATE TABLE ... AS SELECT`, and `UPDATE ...
   FROM` without an input/source uniqueness proof, plus order-sensitive conflict
   modes;

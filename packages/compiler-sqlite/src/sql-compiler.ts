@@ -344,10 +344,16 @@ function validateDeterministicExpressions(ast: Stmt, sql: string): void {
         if (node.limit !== undefined && !isProvablyAtMostOneRow(node) && (!topLevelResult || node.orderBy === undefined)) {
           throw compilerError('SQL_UNORDERED_LIMIT_TEMPORARILY_GATED', sql, node.limit)
         }
-        if (node.select.type === 'SelectFrom' && (
-          node.select.distinctness === 'Distinct' || node.select.groupBy !== undefined
-        )) throw compilerError('SQL_CANONICAL_REPRESENTATIVE_TEMPORARILY_GATED', sql, node.select)
-        if (node.compounds?.some((compound) => compound.operator !== 'UnionAll') === true) {
+        if (node.select.type === 'SelectFrom' && node.select.distinctness === 'Distinct' &&
+            !isRepresentativeStableProjection(node.select.columns, sql) && !isProvablyAtMostOneRow(node)) {
+          throw compilerError('SQL_CANONICAL_REPRESENTATIVE_TEMPORARILY_GATED', sql, node.select)
+        }
+        if (node.select.type === 'SelectFrom' && node.select.groupBy !== undefined &&
+            !isSafeGroupedProjection(node.select, sql)) {
+          throw compilerError('SQL_CANONICAL_REPRESENTATIVE_TEMPORARILY_GATED', sql, node.select)
+        }
+        if (node.compounds?.some((compound) => compound.operator !== 'UnionAll') === true &&
+            !isRepresentativeStableCompound(node, sql)) {
           throw compilerError('SQL_CANONICAL_REPRESENTATIVE_TEMPORARILY_GATED', sql, node)
         }
       },
@@ -369,6 +375,7 @@ function validateDeterministicExpressions(ast: Stmt, sql: string): void {
 
 function validateFunction(node: FunctionCallExpr, sql: string): void {
   const name = asciiLower(node.name.name)
+  if (name === 'group_concat' && isSafeOrderedGroupConcat(node, sql)) return
   if (TEMPORARILY_GATED_FUNCTIONS.has(name)) {
     throw compilerError('SQL_FUNCTION_TEMPORARILY_GATED', sql, node)
   }
@@ -386,10 +393,12 @@ function validateFunction(node: FunctionCallExpr, sql: string): void {
     throw compilerError('SQL_FUNCTION_NOT_REGISTERED', sql, node)
   }
   if ((name === 'min' || name === 'max') && node.args?.length === 1) {
-    throw compilerError('SQL_CANONICAL_REPRESENTATIVE_TEMPORARILY_GATED', sql, node)
+    if (!isRepresentativeStableExpression(node.args[0]!)) {
+      throw compilerError('SQL_CANONICAL_REPRESENTATIVE_TEMPORARILY_GATED', sql, node)
+    }
   }
   if (node.filterOver?.overClause !== undefined) {
-    throw compilerError('SQL_WINDOW_TEMPORARILY_GATED', sql, node)
+    if (!isPeerStableWindow(node)) throw compilerError('SQL_WINDOW_TEMPORARILY_GATED', sql, node)
   }
 }
 
@@ -445,6 +454,71 @@ function isProvablySingletonFrom(from: NonNullable<Extract<Stmt, { type: 'Update
   const source = from.select
   return from.joins === undefined && source?.type === 'SelectSelectTable' &&
     isProvablyAtMostOneRow(source.select)
+}
+
+function isRepresentativeStableProjection(
+  columns: Extract<Select['select'], { type: 'SelectFrom' }>['columns'],
+  _sql: string,
+): boolean {
+  return columns.length > 0 && columns.every((column) =>
+    column.type === 'ExprResultColumn' && isRepresentativeStableExpression(column.expr))
+}
+
+function isRepresentativeStableExpression(node: AstNode): boolean {
+  return node.type === 'FunctionCallExpr' && asciiLower(node.name.name) === 'typeof' &&
+    node.args?.length === 1 && node.distinctness === undefined && node.orderBy === undefined &&
+    node.filterOver === undefined
+}
+
+function isSafeGroupedProjection(
+  select: Extract<Select['select'], { type: 'SelectFrom' }>,
+  sql: string,
+): boolean {
+  const groups = select.groupBy ?? []
+  return groups.length > 0 && select.columns.every((column) => {
+    if (column.type !== 'ExprResultColumn') return false
+    if (groups.some((group) => sameSource(group, column.expr, sql))) return true
+    return isDeterministicAggregateExpression(column.expr)
+  })
+}
+
+function isDeterministicAggregateExpression(node: AstNode): boolean {
+  if (node.type === 'FunctionCallStarExpr') {
+    return asciiLower(node.name.name) === 'count' && node.filterOver?.overClause === undefined
+  }
+  if (node.type !== 'FunctionCallExpr' || node.filterOver?.overClause !== undefined) return false
+  const name = asciiLower(node.name.name)
+  if (name === 'count') return true
+  return (name === 'min' || name === 'max') && node.args?.length === 1 &&
+    isRepresentativeStableExpression(node.args[0]!)
+}
+
+function isRepresentativeStableCompound(select: Select, sql: string): boolean {
+  if (select.select.type !== 'SelectFrom' || !isRepresentativeStableProjection(select.select.columns, sql)) return false
+  return select.compounds?.every((compound) => compound.operator === 'UnionAll' || (
+    compound.select.type === 'SelectFrom' && isRepresentativeStableProjection(compound.select.columns, sql)
+  )) ?? true
+}
+
+function isPeerStableWindow(node: FunctionCallExpr): boolean {
+  const name = asciiLower(node.name.name)
+  if (name !== 'rank' && name !== 'dense_rank') return false
+  const over = node.filterOver?.overClause
+  return over?.type === 'WindowOver' && over.window.type === 'Window' &&
+    over.window.orderBy !== undefined && over.window.orderBy.length > 0
+}
+
+function isSafeOrderedGroupConcat(node: FunctionCallExpr, sql: string): boolean {
+  if (node.args === undefined || node.args.length < 1 || node.args.length > 2 ||
+      node.distinctness !== undefined || node.filterOver?.overClause !== undefined) return false
+  const ordering = node.orderBy?.type === 'SortListFunctionCallOrder' ? node.orderBy.columns : undefined
+  return ordering !== undefined && ordering.length > 0 &&
+    sameSource(ordering.at(-1)!.expr, node.args[0]!, sql)
+}
+
+function sameSource(left: AstNode, right: AstNode, sql: string): boolean {
+  return sql.slice(left.span.offset, left.span.offset + left.span.length) ===
+    sql.slice(right.span.offset, right.span.offset + right.span.length)
 }
 
 interface OrderedMutationSyntax {

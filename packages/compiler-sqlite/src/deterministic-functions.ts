@@ -84,6 +84,8 @@ export const DETERMINISTIC_SQLITE_COMPILER_FUNCTIONS: ReadonlySet<string> = new 
   'count',
   'min',
   'max',
+  // Admitted only when the SQL compiler proves a value-completed input order.
+  'group_concat',
   // The compiler supplies deterministic ordering semantics for these window
   // functions before they reach SQLite.
   'row_number',

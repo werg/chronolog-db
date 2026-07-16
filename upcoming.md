@@ -121,7 +121,7 @@ Acceptance:
 
 ## Project 7 — Aggregates, compounds, and windows
 
-Status: in progress
+Status: complete
 
 - Determinize `DISTINCT`, `GROUP BY`, representative-sensitive `MIN`/`MAX`,
   distinct compounds, windows, and ordered/order-sensitive aggregates.
@@ -129,13 +129,13 @@ Status: in progress
 
 Acceptance:
 
-- [ ] Independent reference and DoltLite results agree for adversarial ties,
+- [x] Independent reference and DoltLite results agree for adversarial ties,
       Nulls, dynamic types, and duplicate encodings.
-- [ ] Replay and cross-platform digests agree.
+- [x] Replay and cross-platform digests agree.
 
 ## Project 8 — Registered extensions and advanced indexes
 
-Status: pending
+Status: in progress
 
 - Complete registered deterministic functions and collations.
 - Gate virtual tables and table-valued functions behind immutable identities

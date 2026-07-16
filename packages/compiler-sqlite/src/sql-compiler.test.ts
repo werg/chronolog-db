@@ -52,6 +52,21 @@ describe('deterministic SQL compiler', () => {
     ])
   })
 
+  it('admits representative- and peer-stable aggregate, compound, and window shapes', () => {
+    const statements = [
+      'SELECT DISTINCT typeof(value) FROM accounts',
+      'SELECT typeof(value), count(*) FROM accounts GROUP BY typeof(value)',
+      'SELECT min(typeof(value)), max(typeof(value)) FROM accounts',
+      'SELECT typeof(value) FROM accounts UNION SELECT typeof(value) FROM archived_accounts',
+      'SELECT rank() OVER (ORDER BY value), value FROM accounts',
+      'SELECT dense_rank() OVER (ORDER BY value), value FROM accounts',
+      'SELECT group_concat(value ORDER BY value) FROM accounts',
+    ]
+    expect(statements.map((sql) => compileSqlStatement({ sql, bindings: [] }, 'body').statementClass)).toEqual(
+      Array.from({ length: statements.length }, () => 'read'),
+    )
+  })
+
   it('adds binary result-column ties after authored outer ordering', () => {
     const compiled = compileSqlStatement({
       sql: 'SELECT id, name FROM accounts ORDER BY name COLLATE NOCASE DESC NULLS LAST LIMIT 5',
@@ -121,6 +136,12 @@ describe('deterministic SQL compiler', () => {
     ['UPDATE accounts SET value = source.value FROM source WHERE source.id = accounts.id', 'SQL_ORDER_SENSITIVE_UPDATE_TEMPORARILY_GATED'],
     ['CREATE TABLE copied AS SELECT id FROM accounts', 'SQL_CREATE_TABLE_AS_SELECT_TEMPORARILY_GATED'],
     ["UPDATE OR REPLACE accounts SET value = 'next'", 'SQL_ORDER_SENSITIVE_UPDATE_TEMPORARILY_GATED'],
+    ['SELECT DISTINCT value FROM accounts', 'SQL_CANONICAL_REPRESENTATIVE_TEMPORARILY_GATED'],
+    ['SELECT value, id FROM accounts GROUP BY value', 'SQL_CANONICAL_REPRESENTATIVE_TEMPORARILY_GATED'],
+    ['SELECT min(value) FROM accounts', 'SQL_CANONICAL_REPRESENTATIVE_TEMPORARILY_GATED'],
+    ['SELECT value FROM accounts UNION SELECT value FROM archived_accounts', 'SQL_CANONICAL_REPRESENTATIVE_TEMPORARILY_GATED'],
+    ['SELECT row_number() OVER (ORDER BY value), value FROM accounts', 'SQL_WINDOW_TEMPORARILY_GATED'],
+    ['SELECT group_concat(value ORDER BY id) FROM accounts', 'SQL_FUNCTION_TEMPORARILY_GATED'],
     ['CREATE TEMP TABLE x (id)', 'SQL_TEMP_OBJECT_PROHIBITED'],
     ['DROP TABLE chronolog_transactions', 'SQL_PROTECTED_OBJECT_NAME'],
     ['SELECT * FROM dolt_log', 'SQL_PROTECTED_OBJECT_READ'],

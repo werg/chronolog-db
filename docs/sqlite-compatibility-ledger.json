@@ -83,12 +83,12 @@
     "limitOffset": { "status": "determinized", "reason": "canonical_lowering", "current": "A row-producing top-level SELECT LIMIT requires authored ORDER BY and canonical returned-column tie completion. Nested or unordered LIMIT is admitted only when the SELECT is syntactically at most one row; other row choices fail closed." },
     "orderedResults": { "status": "determinized", "reason": "canonical_lowering", "current": "Authored outer ORDER BY is completed with every returned column under BINARY collation; an ordered mode without ORDER BY is rejected." },
     "unorderedResults": { "status": "determinized", "reason": "canonical_lowering", "current": "Multiset and set rows are sorted by tagged canonical row CBOR; set mode removes exact duplicates." },
-    "distinctGroupByAndDistinctCompounds": { "status": "temporarily_gated", "reason": "determinism_conformance", "compilerError": "SQL_CANONICAL_REPRESENTATIVE_TEMPORARILY_GATED" },
+    "distinctGroupByAndDistinctCompounds": { "status": "determinized", "reason": "canonical_lowering", "current": "DISTINCT and distinct compounds require representative-stable projections; the initial proof admits typeof(...) values. GROUP BY requires every output to be an exact group expression or a proven deterministic aggregate. Bare representative columns remain gated." },
     "unionAll": { "status": "profile_pinned", "reason": "profile_identity", "current": "Supported subject to result ordering and nested-query gates." },
-    "windowFunctions": { "status": "temporarily_gated", "reason": "determinism_conformance", "compilerError": "SQL_WINDOW_TEMPORARILY_GATED" },
+    "windowFunctions": { "status": "determinized", "reason": "canonical_lowering", "current": "Peer-stable rank() and dense_rank() with authored window ordering are admitted. row_number, ntile, lag, lead, and other peer-sensitive shapes remain gated until identity tie completion is available." },
     "aggregateCount": { "status": "portable", "reason": "implemented" },
-    "aggregateMinMax": { "status": "temporarily_gated", "reason": "determinism_conformance", "compilerError": "SQL_CANONICAL_REPRESENTATIVE_TEMPORARILY_GATED" },
-    "otherAggregates": { "status": "temporarily_gated", "reason": "determinism_conformance", "compilerError": "SQL_FUNCTION_TEMPORARILY_GATED or SQL_FUNCTION_NOT_REGISTERED" },
+    "aggregateMinMax": { "status": "determinized", "reason": "canonical_lowering", "current": "MIN/MAX are admitted only for representative-stable arguments; the initial proof admits typeof(...). Dynamic numeric/collation ties and adjacent bare-column representatives remain gated." },
+    "otherAggregates": { "status": "determinized", "reason": "canonical_lowering", "current": "count and value-completed ordered group_concat are admitted. Floating accumulation and aggregates without a proven input order remain gated." },
     "jsonScalarFunctions": { "status": "profile_pinned", "reason": "profile_identity", "current": "Only functions present in the closed deterministic function registry are admitted." },
     "jsonArrowOperators": { "status": "temporarily_gated", "reason": "determinism_conformance", "compilerError": "SQL_JSON_OPERATOR_TEMPORARILY_GATED" },
     "matchAndRegexp": { "status": "temporarily_gated", "reason": "registered_extension", "compilerError": "SQL_REGISTERED_OPERATOR_REQUIRED" },
@@ -103,7 +103,7 @@
     "currentTimeLiterals": { "status": "temporarily_gated", "reason": "ambient_state", "compilerError": "SQL_SIGNED_TIME_TEMPORARILY_GATED" },
     "randomAndRandomblob": { "status": "temporarily_gated", "reason": "ambient_state", "compilerError": "SQL_FUNCTION_TEMPORARILY_GATED" },
     "connectionState": { "status": "temporarily_gated", "reason": "ambient_state", "names": ["changes", "last_insert_rowid", "total_changes"], "compilerError": "SQL_FUNCTION_TEMPORARILY_GATED" },
-    "floatingOrOrderSensitive": { "status": "temporarily_gated", "reason": "determinism_conformance", "names": ["avg", "sum", "total", "group_concat", "printf", "round"], "compilerError": "SQL_FUNCTION_TEMPORARILY_GATED or SQL_FUNCTION_NOT_REGISTERED" },
+    "floatingOrOrderSensitive": { "status": "determinized", "reason": "canonical_lowering", "names": ["avg", "sum", "total", "group_concat", "printf", "round"], "current": "group_concat is admitted only with authored aggregate ORDER BY whose final term is the concatenated value, making residual ties output-identical. Floating accumulation and formatting remain gated." },
     "dynamicExtensionAndDoltFunctions": { "status": "prohibited", "reason": "protected_state", "compilerError": "SQL_FUNCTION_NOT_REGISTERED" },
     "unknownFunction": { "status": "prohibited", "reason": "registered_extension", "compilerError": "SQL_FUNCTION_NOT_REGISTERED" }
   },
@@ -146,8 +146,6 @@
   },
   "knownTemporaryDebt": [
     "Exact SQLite 3.54 parser grammar remains unavailable; the pinned 3.53/3.54 compatibility boundary is measured by pnpm conformance:sqlite",
-    "DISTINCT/GROUP BY/min/max representative canonicalization",
-    "Window and ordered aggregate peer/tie completion",
     "Registered deterministic functions, collations, and virtual-table modules",
     "ANALYZE and REINDEX replay conformance"
   ]

@@ -15,6 +15,9 @@ import {
   FeedForkRegistry,
   JsonFeedForkPersistence,
   createEpochEnvelopeCipher,
+  FileBlobStore,
+  HttpBlobStore,
+  ReplicatedBlobStore,
   type MembershipResolver,
 } from '@chronolog/node-core'
 import { equalBytes } from '@chronolog/protocol'
@@ -64,6 +67,8 @@ process.stdout.write(`${JSON.stringify({
   membershipRevision: Buffer.from(node.membershipRevision).toString('base64url'),
   governanceRevision: governance?.snapshot.revision.toString() ?? null,
   encryptionEpoch: governance?.currentEpoch?.toString() ?? config.epoch,
+  blobMode: runtime.blobMaxInlineBytes === undefined ? 'inline' : 'manifest-v1',
+  blobPeers: runtime.blobPeers.length,
 })}\n`)
 
 let stopping = false
@@ -182,6 +187,16 @@ async function startRuntime() {
       membershipState = state
       envelopeCipher = governance.cipherRing.current()
     }
+    const localBlobStore = runtime.blobMaxInlineBytes === undefined
+      ? undefined
+      : new FileBlobStore(join(dataDirectory, 'blobs'))
+    const blobStore = localBlobStore === undefined
+      ? undefined
+      : new ReplicatedBlobStore(localBlobStore, runtime.blobPeers.map((peer) => new HttpBlobStore({
+        baseUrl: peer.url,
+        ...(peer.token === undefined ? {} : { token: peer.token }),
+        maximumChunkBytes: runtime.blobChunkBytes!,
+      })))
     node = new ChronologNode({
       groupId,
       groupRoute: fromBase64(config.groupRoute),
@@ -203,6 +218,13 @@ async function startRuntime() {
       feedForkRegistry: new FeedForkRegistry(
         new JsonFeedForkPersistence(join(dataDirectory, 'feed-continuity.json')),
       ),
+      ...(blobStore === undefined ? {} : {
+        blobPayloads: {
+          store: blobStore,
+          maxInlineBytes: runtime.blobMaxInlineBytes!,
+          chunkBytes: runtime.blobChunkBytes!,
+        },
+      }),
     })
     await node.start()
     server = new HttpRpcServer({
@@ -217,6 +239,7 @@ async function startRuntime() {
       ...(runtime.token === undefined ? {} : { token: runtime.token }),
       health: async () => daemonHealth(await node!.status(), stopping),
       metrics: async () => prometheusMetrics(await node!.status()),
+      ...(localBlobStore === undefined ? {} : { blob: (digest: Uint8Array) => localBlobStore.get(digest) }),
     })
     const address = await server.listen()
     const nat = await discoverPublicSsbAddress({

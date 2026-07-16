@@ -217,6 +217,8 @@ Progress:
       evidence waits for the first prior release artifact.
 - [x] Offline signed snapshot archive export/stage/verify/atomic import and
       signed-head-bound feed repair with losing-fork discard and state rebuild.
-- [ ] Recorded independent-custodian and snapshot-repair drills, remote blob
-      fetch, verified traversal, pilot runbooks, and
+- [x] Opt-in authenticated HTTPS blob serving/fetch with bounded exact-digest
+      verification and immutable local read-through retention.
+- [ ] Recorded independent-custodian, snapshot-repair, and multi-host blob
+      drills, verified traversal, pilot runbooks, and
       external assessment.

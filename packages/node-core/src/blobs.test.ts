@@ -2,10 +2,10 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { generateEd25519KeyPair } from '@chronolog/protocol'
-import { afterEach, describe, expect, it } from 'vitest'
+import { generateEd25519KeyPair, payloadChunkDigest } from '@chronolog/protocol'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { FileBlobStore, MemoryBlobStore, loadEnvelopePayload, storeEnvelopePayload } from './blobs.js'
+import { FileBlobStore, HttpBlobStore, MemoryBlobStore, ReplicatedBlobStore, loadEnvelopePayload, storeEnvelopePayload } from './blobs.js'
 import { decodeSignedEnvelope, encodeSignedEnvelope } from './wire.js'
 
 const directories: string[] = []
@@ -42,6 +42,29 @@ describe('content-addressed envelope blobs', () => {
     await expect(loadEnvelopePayload(manifest, missing)).rejects.toThrow('BLOB_CHUNK_MISSING')
     await expect(missing.put(manifest.chunks[0]!.digest, Uint8Array.of(9)))
       .rejects.toThrow('BLOB_CHUNK_DIGEST_MISMATCH')
+  })
+
+  it('authenticates, bounds, verifies, and retains remotely fetched chunks', async () => {
+    const chunk = bytes(64, 9)
+    const digest = await payloadChunkDigest(chunk)
+    const fetch = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      expect(init?.headers).toEqual({ authorization: 'Bearer peer-secret' })
+      return new Response(chunk.slice().buffer, { headers: { 'content-length': String(chunk.length) } })
+    })
+    const local = new MemoryBlobStore()
+    const store = new ReplicatedBlobStore(local, [new HttpBlobStore({
+      baseUrl: 'https://peer.example', token: 'peer-secret', fetch, maximumChunkBytes: 128,
+    })])
+    await expect(store.get(digest)).resolves.toEqual(chunk)
+    await expect(store.get(digest)).resolves.toEqual(chunk)
+    expect(fetch).toHaveBeenCalledTimes(1)
+
+    const substituted = new HttpBlobStore({
+      baseUrl: 'https://peer.example',
+      fetch: async () => new Response(Uint8Array.of(1), { headers: { 'content-length': '1' } }),
+    })
+    await expect(substituted.get(digest)).rejects.toThrow('BLOB_CHUNK_DIGEST_MISMATCH')
+    expect(() => new HttpBlobStore({ baseUrl: 'http://peer.example' })).toThrow('BLOB_REMOTE_HTTPS_REQUIRED')
   })
 })
 

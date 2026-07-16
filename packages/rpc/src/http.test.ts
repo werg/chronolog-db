@@ -44,6 +44,29 @@ describe('HttpRpcServer lifecycle', () => {
     }
   })
 
+  it('serves only exact authenticated immutable blob identities', async () => {
+    const digest = '01'.repeat(32)
+    const server = new HttpRpcServer({
+      service: {} as ChronologRpcService,
+      port: 0,
+      token: 'blob-secret',
+      blob: async (requested) => Buffer.from(requested).toString('hex') === digest ? Uint8Array.of(4, 5, 6) : null,
+    })
+    const address = await server.listen()
+    try {
+      expect((await fetch(`${address.url}/blobs/${digest}`)).status).toBe(401)
+      const response = await fetch(`${address.url}/blobs/${digest}`, {
+        headers: { authorization: 'Bearer blob-secret' },
+      })
+      expect(response.status).toBe(200)
+      expect(response.headers.get('cache-control')).toBe('public, immutable')
+      expect(new Uint8Array(await response.arrayBuffer())).toEqual(Uint8Array.of(4, 5, 6))
+      expect((await fetch(`${address.url}/blobs/not-a-digest`, {
+        headers: { authorization: 'Bearer blob-secret' },
+      })).status).toBe(404)
+    } finally { await server.close() }
+  })
+
   it('aborts active streams before waiting for graceful shutdown', async () => {
     let aborted = false
     const service = serviceWithStatusStream(async function* (context) {

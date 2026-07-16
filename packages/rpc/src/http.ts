@@ -63,6 +63,7 @@ export interface HttpRpcServerOptions {
   readonly shutdownTimeoutMs?: number
   readonly health?: () => object | Promise<object>
   readonly metrics?: () => string | Promise<string>
+  readonly blob?: (digest: Uint8Array) => Promise<Uint8Array | null>
 }
 
 export interface HttpRpcServerAddress {
@@ -151,6 +152,21 @@ export class HttpRpcServer {
       this.#authorize(request)
       response.writeHead(200, { 'content-type': 'text/plain; version=0.0.4; charset=utf-8' })
       response.end(await this.#options.metrics())
+      return
+    }
+    const blobMatch = request.method === 'GET' && request.url !== undefined
+      ? /^\/blobs\/([0-9a-f]{64})$/u.exec(new URL(request.url, 'http://localhost').pathname)
+      : null
+    if (blobMatch !== null && this.#options.blob !== undefined) {
+      this.#authorize(request)
+      const value = await this.#options.blob(Uint8Array.from(Buffer.from(blobMatch[1]!, 'hex')))
+      if (value === null) throw new ChronologRpcError('not_found', 'Blob chunk not found')
+      response.writeHead(200, {
+        'content-type': 'application/octet-stream',
+        'content-length': String(value.byteLength),
+        'cache-control': 'public, immutable',
+      })
+      response.end(value)
       return
     }
     if (request.method !== 'POST' || request.url === undefined) throw new ChronologRpcError('not_found', 'RPC route not found')

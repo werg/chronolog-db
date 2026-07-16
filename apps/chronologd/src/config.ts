@@ -56,6 +56,9 @@ export interface DaemonRuntimeConfig {
   readonly publicSsbAddress?: string
   readonly natDiscoveryUrl?: string
   readonly natDiscoveryTimeoutMs: number
+  readonly blobMaxInlineBytes?: number
+  readonly blobChunkBytes?: number
+  readonly blobPeers: readonly { readonly url: string; readonly token?: string }[]
 }
 
 export function parseDaemonRuntimeConfig(environment: NodeJS.ProcessEnv): DaemonRuntimeConfig {
@@ -66,6 +69,9 @@ export function parseDaemonRuntimeConfig(environment: NodeJS.ProcessEnv): Daemon
   if (!isLoopbackHost(host) && token === undefined) throw new Error('CHRONOLOG_TOKEN_REQUIRED_FOR_REMOTE_HOST')
   const scope = environment.CHRONOLOG_SSB_SCOPE ?? 'device'
   if (scope !== 'device' && scope !== 'local' && scope !== 'public') throw new Error('CHRONOLOG_SSB_SCOPE_INVALID')
+  const blobMaxInlineBytes = environment.CHRONOLOG_BLOB_MAX_INLINE_BYTES
+  const blobPeers = parseBlobPeers(environment.CHRONOLOG_BLOB_PEERS)
+  if (blobMaxInlineBytes === undefined && blobPeers.length > 0) throw new Error('CHRONOLOG_BLOB_MODE_REQUIRED')
   return {
     host,
     port: integer(environment.CHRONOLOG_PORT ?? '8787', 0, 65_535, 'CHRONOLOG_PORT'),
@@ -88,6 +94,11 @@ export function parseDaemonRuntimeConfig(environment: NodeJS.ProcessEnv): Daemon
       natDiscoveryUrl: validUrl(environment.CHRONOLOG_NAT_DISCOVERY_URL, 'CHRONOLOG_NAT_DISCOVERY_URL'),
     }),
     natDiscoveryTimeoutMs: integer(environment.CHRONOLOG_NAT_DISCOVERY_TIMEOUT_MS ?? '3000', 1, 60_000, 'CHRONOLOG_NAT_DISCOVERY_TIMEOUT_MS'),
+    ...(blobMaxInlineBytes === undefined ? {} : {
+      blobMaxInlineBytes: integer(blobMaxInlineBytes, 0, 16 * 1024 * 1024, 'CHRONOLOG_BLOB_MAX_INLINE_BYTES'),
+      blobChunkBytes: integer(environment.CHRONOLOG_BLOB_CHUNK_BYTES ?? '1048576', 1, 4 * 1024 * 1024, 'CHRONOLOG_BLOB_CHUNK_BYTES'),
+    }),
+    blobPeers,
   }
 }
 
@@ -285,6 +296,21 @@ function parsePeers(value: string | undefined): readonly { readonly address: str
     return { address: peer.address, feedId: peer.feedId }
   })
   if (new Set(peers.map((peer) => peer.feedId)).size !== peers.length) throw new Error('CHRONOLOG_SSB_PEER_DUPLICATE')
+  return peers
+}
+
+function parseBlobPeers(value: string | undefined): readonly { readonly url: string; readonly token?: string }[] {
+  if (value === undefined) return []
+  let parsed: unknown
+  try { parsed = JSON.parse(value) } catch { throw new Error('CHRONOLOG_BLOB_PEERS_JSON_INVALID') }
+  if (!Array.isArray(parsed)) throw new Error('CHRONOLOG_BLOB_PEERS_INVALID')
+  const peers = parsed.map((peer) => {
+    if (!isRecord(peer) || typeof peer.url !== 'string' ||
+        (peer.token !== undefined && (typeof peer.token !== 'string' || peer.token.length === 0)) ||
+        Object.keys(peer).some((field) => field !== 'url' && field !== 'token')) throw new Error('CHRONOLOG_BLOB_PEER_INVALID')
+    return { url: validUrl(peer.url, 'CHRONOLOG_BLOB_PEER_URL'), ...(peer.token === undefined ? {} : { token: peer.token }) }
+  })
+  if (new Set(peers.map((peer) => peer.url)).size !== peers.length) throw new Error('CHRONOLOG_BLOB_PEER_DUPLICATE')
   return peers
 }
 

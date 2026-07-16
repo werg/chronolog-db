@@ -41,7 +41,7 @@ The principal boundaries are:
 | Replay result substitution | Protected result bytes and domain-separated digest verified on reopen | Stored-data format migration is intentionally absent in the prototype |
 | Capability or epoch rollback | Signed revision chain, exact previous digest, scoped readers, epoch chain, threshold recovery records, verified share export/purge, offline signing and threshold verification | A production quorum exists only after a recorded independent-custodian ceremony and drill |
 | Plaintext daemon private keys | Reference-only v2 config/governance documents and Linux Secret Service migration | Other OS/hardware providers and independent recovery custody remain open |
-| Blob substitution or truncation | Per-chunk and total domain-separated digests, bounded resolution, content-addressed stores | No production cross-node chunk fetch protocol; blob mode is not active by default |
+| Blob substitution or truncation | Per-chunk and total domain-separated digests, bounded authenticated HTTPS retrieval, verified read-through retention, content-addressed stores, outer digest/decryption/inner signature checks | No distributed reachability-aware garbage collection; blob mode remains explicit opt-in |
 | Snapshot rollback or foreign-state import | Fixed archive paths and hashes, authorized signature, group/manifest/no-rollback checks, staged production-adapter DB/log verification, fsynced atomic replacement and retained backup | Pilot restore/repair drill and platform filesystem qualification remain required |
 | RPC credential disclosure or unauthenticated remote bind | Remote bind requires bearer token; timing-safe comparison; metrics share authentication | Bearer tokens need deployment TLS/secret rotation outside this process |
 | Dependency/build substitution | Pinned lockfile, native source checksum/patches, clean-worktree native archives, per-file verification, SBOM, subject hashes, package replacement drill, OIDC provenance attestations | A prior-release-to-candidate drill and publication ceremony require an actual earlier release |
@@ -53,9 +53,10 @@ The principal boundaries are:
   prepare/sign/combine/verify steps offline. Release blocker remains procedural:
   three independent custodians must complete the handoff and a two-person drill
   on the exact release candidate; a local test cannot establish human custody.
-- `SEC-002` — Blob manifests have exact local storage and wire verification but
-  no authenticated inter-node fetch/retention protocol. Feature disabled by
-  default; it must not appear in an active manifest.
+- `SEC-002` — Blob manifests now have authenticated bounded inter-node fetch,
+  exact digest verification, and immutable local read-through retention.
+  Automatic garbage collection remains prohibited until a distributed
+  reachability proof exists; pilot sizing must assume retained chunks.
 - `SEC-003` — Snapshot export/import now hashes fixed archive paths, validates a
   staged database against signed logical evidence, retains the old database,
   atomically replaces the materializer, and forces derived-state rebuild.

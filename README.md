@@ -193,6 +193,9 @@ archives, staged logical verification, atomic replacement with backup, and
 signed-head-bound feed repair. The daemon and snapshot tool share an exclusive
 data-directory lock; see the [snapshot recovery guide](docs/snapshot-recovery.md).
 
+Large encrypted envelopes can opt into authenticated cross-node chunk fetch
+and verified read-through retention; see the [blob replication guide](docs/blob-replication.md).
+
 `CHRONOLOG_STATIC_MEMBERSHIP_FILE` remains an explicit legacy/testing override.
 It points every daemon at the same out-of-band JSON snapshot, whose group,
 membership revision, and validation policy must match the corresponding values

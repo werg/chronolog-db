@@ -124,7 +124,9 @@ Signed snapshot manifests and the offline snapshot CLI now provide exact
 archive hashing, signer/group/manifest/rollback checks, independent staged
 Dolt/log validation, atomic database replacement with backup, derived-state
 rebuild, and signed-head-bound fork repair. Content-addressed blob stores
-provide local chunk integrity; cross-node fetching remains disabled.
+provide local chunk integrity. Opt-in cross-node retrieval uses authenticated
+HTTPS, bounded exact-digest fetches, and a verified local read-through cache;
+automatic distributed garbage collection remains intentionally absent.
 
 ## Outstanding release gates
 
@@ -134,8 +136,8 @@ provide local chunk integrity; cross-node fetching remains disabled.
 - macOS/Windows OS key providers and hardware-backed custody policy (Linux
   Secret Service migration and independent recovery export/sign/purge tooling
   are implemented; the pilot ceremony remains required);
-- production drill evidence for trusted snapshot import/fork repair and the
-  still-disabled cross-node large-payload fetch path;
+- production drill evidence for trusted snapshot import/fork repair and
+  multi-host large-payload retention/availability;
 - NAT discovery, sizing envelopes, alertable observability, and runbooks;
 - resolution or explicit acceptance of every finding in the
   [internal threat review](security-threat-review.md);

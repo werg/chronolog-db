@@ -78,12 +78,47 @@ validator identity to that node's exact authenticated SSB feed ID through
 otherwise valid signed candidate, attestation, or heartbeat through a different
 feed is rejected.
 
-Workers repeatedly:
+Workers choose from a seeded mix of transactions:
 
-1. observe one account balance through the public RPC client;
-2. turn that exact observation into a mandatory `expect` precondition;
-3. submit a deterministic-IR balance update with a seeded delta;
-4. record invocation, success/failure, node, arguments, and transaction ID.
+1. isolated v1→v2 migration chains that record version/checksum history,
+   backfill existing rows, replace an index/view/trigger set, and query the
+   migrated projection and trigger audit;
+2. deliberately failing migrations that create tables, indexes, views,
+   triggers, and history before a constraint error, proving atomic catalog and
+   history rollback;
+3. concurrent legacy-client inserts that omit additive v2 columns and
+   current-client inserts that populate them, both guarded by explicit signed
+   schema-version assumptions;
+4. observed balance updates with a mandatory `expect` precondition and an
+   append-only ledger entry;
+5. two-account transfers with two observations, two expectations, two ordered
+   updates, and matching debit/credit ledger legs;
+6. ordered `UPDATE ... RETURNING ... ORDER BY ... LIMIT ... OFFSET` mutations;
+7. empty `RETURNING` result sets;
+8. inserts containing text, blobs, and nullable values;
+9. multi-statement `CREATE TABLE`, `ALTER TABLE`, and ordered schema queries;
+10. deliberately false assertions that must produce precondition rejections;
+11. deliberately duplicated primary keys after a large sentinel update, which
+   must produce an attributed execution rejection and roll back the update.
+
+The default percentages favor contended balance changes and transfers while
+still exercising every class above. Short runs begin with one attempt of every
+enabled class across the worker pool, then switch to weighted random selection.
+If the nominal duration expires while a slower worker still owns a coverage
+slot, that worker completes its remaining slots before stopping.
+A scenario can override the mix with sparse
+`workload.operationWeights`; omitted kinds then have weight zero. It can also
+set `maximumTransfer` and `resultSampleSize`. Every invocation records its
+operation kind, arguments, publication ID, expected outcome class, and local
+submission failure.
+
+Schema assumptions use the same signed precondition path as data assumptions.
+`schemaVersionPrecondition(component, version)` builds a deterministic
+`EXISTS` query against `chaos_schema_migrations`, including a useful application
+label. Migration and client operations use it with `draft.assert(...)`, so a
+schema mismatch is replay-visible and attributed instead of becoming an
+unexplained body failure. Run output and `summary.json` report counts by
+operation kind, making missing migration coverage immediately visible.
 
 The random seed fixes workload choices and fault selection. OS scheduling,
 network timing, cryptographic identities, and wall-clock transaction times are
@@ -120,6 +155,8 @@ After the workload and faults finish, the harness heals the topology and
 requires three consecutive stable samples. A passing run proves:
 
 - canonical application-state digests are identical on every node;
+- application schema definitions, including workload-created tables, are
+  identical on every node;
 - protected `chronolog_transactions` digests and exact rows are identical;
 - published order lengths agree and no node is replaying;
 - no encrypted payload remains pending;
@@ -128,6 +165,22 @@ requires three consecutive stable samples. A passing run proves:
   in-flight tail created by one-second validator heartbeats;
 - every admitted log outcome is terminal (`accepted` or a replay-visible
   rejection);
+- every admitted workload transaction has an outcome allowed by its generated
+  intent, including exact assertion and constraint rejection codes;
+- accepted rows have a versioned, non-empty result envelope and no failure
+  attribution, while rejected rows have no result envelope and have internally
+  consistent precondition, statement, or finalize attribution;
+- a configurable balanced sample of accepted and rejected publications is
+  queried through `transaction.getResult`; accepted envelopes must decode and
+  rejected transactions must return `result_not_available`;
+- each account balance and committed-update version exactly matches the sum and
+  count of its append-only ledger legs;
+- neither the million-unit rejection sentinel nor an extra reserved ledger row
+  escaped savepoint rollback;
+- accepted migration chains retain v1/v2 history and only their current
+  index/view/trigger set, rejected migrations leave no catalog or history
+  objects, and both legacy and current schema clients commit compatible v2 rows
+  with matching trigger audits;
 - every acknowledged publication is either present in the canonical log or
   has `policy_watermark_reached` evidence showing that validators can no longer
   admit its backdated timestamp;
@@ -150,7 +203,7 @@ path. The directory contains:
 | `history.ndjson` | timestamped operations, faults, healing, and invariant events |
 | `metrics.ndjson` | per-second CPU, memory, network, block I/O, state, and restart counts |
 | `logs/node-*.log` | daemon stdout/stderr captured during the run |
-| `snapshots.json` | final canonical rows, digests, revisions, and replication status |
+| `snapshots.json` | final application rows, schema rows, protected log rows, digests, revisions, and replication status |
 | `snapshots.last.json` | last readable samples when convergence times out |
 | `nodes/node-*` | exact DoltLite database, SSB log, control store, keys, and configuration |
 | `summary.json` | pass/fail result, counts, invariants, timing, and replay command |

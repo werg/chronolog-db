@@ -1,12 +1,41 @@
 export type NodeName = `node-${number}`
 export type LinkName = `${NodeName}->${NodeName}`
 
+export const WORKLOAD_OPERATION_KINDS = [
+  'migration_chain',
+  'migration_rollback',
+  'legacy_client_write',
+  'current_client_write',
+  'balance_update',
+  'transfer',
+  'ordered_touch',
+  'empty_returning',
+  'document_insert',
+  'ddl_sequence',
+  'precondition_rejection',
+  'constraint_rejection',
+] as const
+export type WorkloadOperationKind = typeof WORKLOAD_OPERATION_KINDS[number]
+
 export interface WorkloadSpec {
   readonly workers: number
   readonly intervalMs: number
   readonly accounts: number
   readonly minimumDelta: number
   readonly maximumDelta: number
+  readonly maximumTransfer?: number
+  readonly resultSampleSize?: number
+  readonly operationWeights?: Partial<Readonly<Record<WorkloadOperationKind, number>>>
+}
+
+export interface WorkloadExpectation {
+  readonly transactionId: string
+  readonly operationId: string
+  readonly operation: WorkloadOperationKind
+  readonly allowedOutcomes: readonly ('accepted' | 'rejected_precondition' | 'rejected_execution')[]
+  readonly rejectionCode?: string
+  readonly failingStatementIndex?: number
+  readonly migrationPrefix?: string
 }
 
 export type FaultSpec =
@@ -52,8 +81,10 @@ export interface NodeSnapshot {
   readonly status: 'starting' | 'ready' | 'replaying' | 'degraded' | 'stopping'
   readonly lastErrorCode?: string
   readonly stateDigest: string
+  readonly schemaDigest: string
   readonly logDigest: string
   readonly stateRows: readonly (readonly unknown[])[]
+  readonly schemaRows: readonly (readonly unknown[])[]
   readonly logRows: readonly (readonly unknown[])[]
   readonly eventSetRevision: string
   readonly materializedRevision: string
@@ -95,7 +126,12 @@ export interface RunSummary {
   readonly finishedAt: string
   readonly elapsedMs: number
   readonly passed: boolean
-  readonly operations: { readonly attempted: number; readonly published: number; readonly failed: number }
+  readonly operations: {
+    readonly attempted: number
+    readonly published: number
+    readonly failed: number
+    readonly byKind: Readonly<Partial<Record<WorkloadOperationKind, number>>>
+  }
   readonly invariants: readonly { readonly name: string; readonly passed: boolean; readonly details?: string }[]
   readonly snapshots: readonly NodeSnapshot[]
   readonly failure?: string

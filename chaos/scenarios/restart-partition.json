@@ -13,7 +13,23 @@
     "intervalMs": 100,
     "accounts": 12,
     "minimumDelta": -5,
-    "maximumDelta": 8
+    "maximumDelta": 8,
+    "maximumTransfer": 12,
+    "resultSampleSize": 64,
+    "operationWeights": {
+      "migration_chain": 8,
+      "migration_rollback": 6,
+      "legacy_client_write": 9,
+      "current_client_write": 9,
+      "balance_update": 22,
+      "transfer": 14,
+      "ordered_touch": 7,
+      "empty_returning": 3,
+      "document_insert": 6,
+      "ddl_sequence": 3,
+      "precondition_rejection": 7,
+      "constraint_rejection": 6
+    }
   },
   "faults": [
     {

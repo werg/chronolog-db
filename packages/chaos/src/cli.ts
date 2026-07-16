@@ -74,6 +74,8 @@ async function execute(scenarioName: string, seed: string, flags: ReadonlyMap<st
     })
     const mark = result.summary.passed ? '✓' : '✗'
     process.stdout.write(`${mark} ${scenario.name}: ${result.summary.operations.published}/${result.summary.operations.attempted} operations published\n`)
+    const coverage = Object.entries(result.summary.operations.byKind).map(([kind, count]) => `${kind}=${count}`).join(', ')
+    process.stdout.write(`  Coverage: ${coverage || 'none'}; local failures=${result.summary.operations.failed}\n`)
     process.stdout.write(`  Artifacts: ${result.artifacts}\n`)
     process.stdout.write(`  Replay: ${result.summary.replayCommand}\n`)
     if (!result.summary.passed) process.exitCode = 1

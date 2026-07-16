@@ -28,7 +28,7 @@ export async function runChaos(options: RunOptions): Promise<CompletedRun> {
   const artifacts = await RunArtifacts.create(options.artifactRoot, options.scenario, options.seed)
   const progress = options.progress ?? (() => undefined)
   let cluster: ChaosCluster | undefined
-  let workload: WorkloadResult = { attempted: 0, published: 0, failed: 0, transactionIds: [] }
+  let workload: WorkloadResult = { attempted: 0, published: 0, failed: 0, transactionIds: [], expectations: [], byKind: {} }
   let snapshots: readonly NodeSnapshot[] = []
   let invariants: RunSummary['invariants'] = []
   let failure: string | undefined
@@ -74,7 +74,8 @@ export async function runChaos(options: RunOptions): Promise<CompletedRun> {
       cluster,
       artifacts,
       timeoutMs: options.scenario.convergenceTimeoutMs,
-      expectedTransactionIds: workload.transactionIds,
+      expectations: workload.expectations,
+      resultSampleSize: options.scenario.workload.resultSampleSize ?? 64,
     })
     snapshots = convergence.snapshots
     invariants = convergence.invariants
@@ -101,7 +102,7 @@ export async function runChaos(options: RunOptions): Promise<CompletedRun> {
     finishedAt: finishedAt.toISOString(),
     elapsedMs: artifacts.elapsedMs(),
     passed: failure === undefined,
-    operations: { attempted: workload.attempted, published: workload.published, failed: workload.failed },
+    operations: { attempted: workload.attempted, published: workload.published, failed: workload.failed, byKind: workload.byKind },
     invariants,
     snapshots,
     ...(failure === undefined ? {} : { failure }),

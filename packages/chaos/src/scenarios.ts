@@ -1,19 +1,19 @@
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 
-import type { ChaosScenario, FaultSpec, LinkName, NodeName } from './types.js'
+import { WORKLOAD_OPERATION_KINDS, type ChaosScenario, type FaultSpec, type LinkName, type NodeName } from './types.js'
 
 const smoke: ChaosScenario = {
   format: 'chronolog-chaos-scenario',
   name: 'smoke',
-  description: 'Three-node quorum under latency, a minority partition, and a validator restart.',
+  description: 'Three-node quorum with mixed schema clients and migrations under latency, partition, and restart.',
   nodes: 3,
   threshold: 2,
   durationMs: 8_000,
   convergenceTimeoutMs: 45_000,
   checkpointEvery: 5,
   cutoffLagMs: 8_000,
-  workload: { workers: 3, intervalMs: 80, accounts: 8, minimumDelta: -3, maximumDelta: 5 },
+  workload: { workers: 3, intervalMs: 80, accounts: 8, minimumDelta: -3, maximumDelta: 5, maximumTransfer: 8, resultSampleSize: 32 },
   faults: [
     { atMs: 1_000, durationMs: 1_200, kind: 'latency', links: 'all', latencyMs: 120, jitterMs: 40 },
     { atMs: 2_700, durationMs: 1_800, kind: 'partition', groups: [['node-0', 'node-1'], ['node-2']] },
@@ -24,14 +24,14 @@ const smoke: ChaosScenario = {
 const crash: ChaosScenario = {
   format: 'chronolog-chaos-scenario',
   name: 'crash',
-  description: 'Focused SIGKILL, durable-feed recovery, stale-session recycling, and catch-up check.',
+  description: 'Migration and transaction recovery across SIGKILL, durable-feed recovery, and catch-up.',
   nodes: 3,
   threshold: 2,
   durationMs: 18_000,
   convergenceTimeoutMs: 60_000,
   checkpointEvery: 5,
   cutoffLagMs: 12_000,
-  workload: { workers: 4, intervalMs: 60, accounts: 8, minimumDelta: -3, maximumDelta: 5 },
+  workload: { workers: 4, intervalMs: 60, accounts: 8, minimumDelta: -3, maximumDelta: 5, maximumTransfer: 8, resultSampleSize: 64 },
   faults: [
     { atMs: 3_000, durationMs: 3_000, kind: 'crash', node: 'node-2' },
   ],
@@ -40,14 +40,14 @@ const crash: ChaosScenario = {
 const stress: ChaosScenario = {
   format: 'chronolog-chaos-scenario',
   name: 'stress',
-  description: 'Sustained five-node workload across partitions, packet faults, crashes, pauses, and CPU pressure.',
+  description: 'Sustained data and schema evolution across partitions, packet faults, crashes, pauses, and CPU pressure.',
   nodes: 5,
   threshold: 3,
   durationMs: 60_000,
   convergenceTimeoutMs: 90_000,
   checkpointEvery: 10,
   cutoffLagMs: 15_000,
-  workload: { workers: 12, intervalMs: 25, accounts: 32, minimumDelta: -10, maximumDelta: 15 },
+  workload: { workers: 12, intervalMs: 25, accounts: 32, minimumDelta: -10, maximumDelta: 15, maximumTransfer: 25, resultSampleSize: 128 },
   faults: [
     { atMs: 3_000, durationMs: 4_000, kind: 'latency', links: 'all', latencyMs: 250, jitterMs: 150 },
     { atMs: 9_000, durationMs: 5_000, kind: 'partition', groups: [['node-0', 'node-1', 'node-2'], ['node-3', 'node-4']] },
@@ -85,6 +85,24 @@ export function validateScenario(value: unknown): ChaosScenario {
   integerBetween(scenario.workload.accounts, 1, 10_000, 'workload.accounts')
   integerBetween(scenario.workload.minimumDelta, -1_000_000, 1_000_000, 'workload.minimumDelta')
   integerBetween(scenario.workload.maximumDelta, scenario.workload.minimumDelta, 1_000_000, 'workload.maximumDelta')
+  if (scenario.workload.maximumTransfer !== undefined) integerBetween(scenario.workload.maximumTransfer, 1, 1_000_000, 'workload.maximumTransfer')
+  if (scenario.workload.resultSampleSize !== undefined) integerBetween(scenario.workload.resultSampleSize, 0, 10_000, 'workload.resultSampleSize')
+  if (scenario.workload.operationWeights !== undefined) {
+    if (!isRecord(scenario.workload.operationWeights)) throw new Error('CHAOS_WORKLOAD_WEIGHTS_INVALID')
+    const unknown = Object.keys(scenario.workload.operationWeights).filter(
+      (kind) => !WORKLOAD_OPERATION_KINDS.includes(kind as typeof WORKLOAD_OPERATION_KINDS[number]),
+    )
+    if (unknown.length > 0) throw new Error(`CHAOS_WORKLOAD_OPERATION_UNKNOWN:${unknown[0]}`)
+    let total = 0
+    for (const kind of WORKLOAD_OPERATION_KINDS) {
+      const weight = scenario.workload.operationWeights[kind]
+      if (weight !== undefined) {
+        integerBetween(weight, 0, 1_000_000, `workload.operationWeights.${kind}`)
+        total += weight
+      }
+    }
+    if (total === 0) throw new Error('CHAOS_WORKLOAD_WEIGHTS_EMPTY')
+  }
   const faults: unknown = value.faults
   if (!Array.isArray(faults)) throw new Error('CHAOS_FAULTS_INVALID')
   for (const fault of faults as readonly unknown[]) validateFault(fault, scenario)

@@ -145,17 +145,43 @@ export class ChaosCluster {
         nodes.set(node.name, { name: node.name, container: started, client, url })
       }))
       const cluster = new ChaosCluster(options.prepared, options.scenario, options.artifacts, network, toxiproxy, links, nodes)
+      await cluster.#waitForReplicationMesh()
       const bootstrapClient = cluster.client(cluster.nodeNames()[0]!)
-      const bootstrap = await bootstrapClient.transaction((tx) => {
-        tx.assert('SELECT 1')
-        tx.exec(chaosBootstrapStatements(options.scenario.workload.accounts))
-      }, { idempotencyKey: 'chronolog-chaos-bootstrap-v1' })
-      const deadline = Date.now() + 120_000
-      while ((await bootstrapClient.getTransactionOutcome(bootstrap.transactionId)).outcome.type === 'pending') {
-        if (Date.now() >= deadline) throw new Error('CHAOS_BOOTSTRAP_TIMEOUT')
-        await delay(250)
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        const bootstrap = await bootstrapClient.transaction((tx) => {
+          tx.assert('SELECT 1')
+          tx.exec(chaosBootstrapStatements(options.scenario.workload.accounts))
+        }, { idempotencyKey: `chronolog-chaos-bootstrap-v1-attempt-${attempt}` })
+        try {
+          const deadline = Date.now() + 30_000
+          let settlement = 'unavailable'
+          let bootstrapOutcome = await bootstrapClient.getTransactionOutcome(bootstrap.transactionId)
+          while (bootstrapOutcome.outcome.type === 'pending') {
+            try {
+              const evidence = await bootstrapClient.getSettlementEvidence(bootstrap.transactionId)
+              settlement = `${evidence.confidence}:unresolved=${evidence.unresolvedReferences.length}:watermark=${evidence.policyWatermarkTimestamp ?? 'none'}`
+              if (evidence.confidence === 'policy_watermark_reached') {
+                await options.artifacts.record({
+                  type: 'run', phase: 'info', name: 'cluster.bootstrap.retry', transactionId: bootstrap.transactionId,
+                  details: { attempt, settlement },
+                })
+                break
+              }
+            } catch { /* Outcome polling remains authoritative while evidence propagates. */ }
+            if (Date.now() >= deadline) throw new Error(`CHAOS_BOOTSTRAP_TIMEOUT:attempt=${attempt}:settlement=${settlement}`)
+            await delay(250)
+            bootstrapOutcome = await bootstrapClient.getTransactionOutcome(bootstrap.transactionId)
+          }
+          if (bootstrapOutcome.outcome.type === 'accepted') return cluster
+          if (bootstrapOutcome.outcome.type === 'rejected') {
+            const attribution = bootstrapOutcome.outcome.attribution
+            throw new Error(`CHAOS_BOOTSTRAP_REJECTED:${attribution.phase}:${attribution.code}:precondition=${attribution.preconditionIndex ?? 'none'}:statement=${attribution.statementIndex ?? 'none'}`)
+          }
+        } finally {
+          bootstrap.dispose()
+        }
       }
-      return cluster
+      throw new Error('CHAOS_BOOTSTRAP_RETRIES_EXHAUSTED')
     } catch (error) {
       await Promise.allSettled(startedNodes.map((container) => container.stop({ timeout: GRACEFUL_RESTART_TIMEOUT_MS })))
       await toxiproxy?.stop().catch(() => undefined)
@@ -177,6 +203,31 @@ export class ChaosCluster {
   }
 
   linkNames(): readonly LinkName[] { return [...this.#links.keys()].sort() }
+
+  async #waitForReplicationMesh(timeoutMs = 60_000): Promise<void> {
+    const deadline = Date.now() + timeoutMs
+    const expectedPeers = this.#nodes.size - 1
+    let last = ''
+    while (Date.now() < deadline) {
+      try {
+        const statuses = await Promise.all(this.clients().map(async ({ name, client }) => ({
+          name,
+          status: await client.getReplicationStatus(),
+        })))
+        last = statuses.map(({ name, status }) => `${name}=${status.connectedPeers}/${status.knownPeers}:${status.state}`).join(',')
+        if (statuses.every(({ status }) => status.knownPeers === expectedPeers && status.connectedPeers === expectedPeers)) {
+          // Allow the first connected heartbeat round to become visible before
+          // publishing a timestamp-sensitive bootstrap candidate.
+          await delay(1_100)
+          return
+        }
+      } catch (error) {
+        last = error instanceof Error ? error.message : String(error)
+      }
+      await delay(250)
+    }
+    throw new Error(`CHAOS_REPLICATION_MESH_TIMEOUT:${last || 'no status available'}`)
+  }
 
   async sampleResources(): Promise<readonly NodeResourceSample[]> {
     return Promise.all(this.nodeNames().map(async (name) => {

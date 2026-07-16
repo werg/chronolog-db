@@ -24,4 +24,28 @@ describe('chaos scenarios', () => {
       faults: [{ atMs: 1, durationMs: 1, kind: 'latency', links: ['node-0->node-9'], latencyMs: 1, jitterMs: 0 }],
     })).toThrow('CHAOS_NODE_INVALID')
   })
+
+  it('accepts a custom mixed-operation workload', () => {
+    const scenario = validateScenario({
+      ...builtInScenarios.smoke,
+      workload: {
+        ...builtInScenarios.smoke.workload,
+        maximumTransfer: 13,
+        resultSampleSize: 7,
+        operationWeights: { transfer: 3, constraint_rejection: 1 },
+      },
+    })
+    expect(scenario.workload.operationWeights).toEqual({ transfer: 3, constraint_rejection: 1 })
+  })
+
+  it('rejects unknown and all-zero workload operation weights', () => {
+    expect(() => validateScenario({
+      ...builtInScenarios.smoke,
+      workload: { ...builtInScenarios.smoke.workload, operationWeights: { mystery: 1 } },
+    })).toThrow('CHAOS_WORKLOAD_OPERATION_UNKNOWN:mystery')
+    expect(() => validateScenario({
+      ...builtInScenarios.smoke,
+      workload: { ...builtInScenarios.smoke.workload, operationWeights: { transfer: 0 } },
+    })).toThrow('CHAOS_WORKLOAD_WEIGHTS_EMPTY')
+  })
 })

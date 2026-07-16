@@ -57,7 +57,10 @@ building blocks for the SQL protocol and compiler.
 ## Current deterministic SQL boundary
 
 The compiler currently admits ordinary `SELECT`, values-based `INSERT`,
-`UPDATE`, `DELETE`, supported read-only catalog pragmas, and streamed DDL.
+`UPDATE`, `DELETE`, supported read-only catalog pragmas, and streamed DDL. It
+also admits scalar subqueries, unordered/nested `LIMIT`, `INSERT ... SELECT`,
+`CREATE TABLE ... AS SELECT`, and `UPDATE ... FROM` when a syntactic
+at-most-one-row proof removes every row choice; broader forms fail closed.
 Ordered results require an authored outer `ORDER BY`; the executor completes
 ties with canonical returned-column keys. Unordered results are canonicalized
 as tagged row sets or multisets. All authored statements are recompiled by the
@@ -68,14 +71,14 @@ determinism/conformance work:
 
 - an exact SQLite 3.54 parser grammar (the current measured 3.53/3.54 boundary
   is executable through `pnpm conformance:sqlite`);
-- consensus REAL input bindings;
-- scalar subqueries, nested or unordered `LIMIT`, and other unresolved row
-  choices;
+- catalog-dependent scalar-subquery uniqueness and multirow nested/unordered
+  `LIMIT` choices;
 - `DISTINCT`, `GROUP BY`, distinct compounds, aggregate `MIN`/`MAX`, windows,
   and ordered/order-sensitive aggregates requiring canonical representative or
   peer selection;
-- `INSERT ... SELECT`, `CREATE TABLE ... AS SELECT`, `UPDATE ... FROM`,
-  conflict-sensitive update forms, and update/delete order-limit support;
+- multirow `INSERT ... SELECT`, `CREATE TABLE ... AS SELECT`, and `UPDATE ...
+  FROM` without an input/source uniqueness proof, plus order-sensitive conflict
+  modes;
 - JSON arrow operators, trigger `RAISE`, registered functions/collations,
   virtual tables, and non-pragma table-valued functions; and
 - `ANALYZE` and `REINDEX` replay conformance.

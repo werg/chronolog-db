@@ -39,6 +39,19 @@ describe('deterministic SQL compiler', () => {
     expect(compiled.body[2]?.resultMode).toBe('ordered')
   })
 
+  it('admits row-choice forms only with a syntactic at-most-one-row proof', () => {
+    const statements = [
+      'SELECT (SELECT 1 WHERE 1) LIMIT 1',
+      "INSERT INTO accounts (id, value) SELECT 1, 'one' WHERE 1",
+      "CREATE TABLE singleton_copy AS SELECT 1 AS id, 'one' AS value",
+      "UPDATE accounts SET value = source.value FROM (SELECT 'next' AS value) AS source",
+      "UPDATE OR ABORT accounts SET value = 'next' WHERE id = 1",
+    ]
+    expect(statements.map((sql) => compileSqlStatement({ sql, bindings: [] }, 'body').statementClass)).toEqual([
+      'read', 'insert', 'schema', 'update', 'update',
+    ])
+  })
+
   it('adds binary result-column ties after authored outer ordering', () => {
     const compiled = compileSqlStatement({
       sql: 'SELECT id, name FROM accounts ORDER BY name COLLATE NOCASE DESC NULLS LAST LIMIT 5',
@@ -106,6 +119,8 @@ describe('deterministic SQL compiler', () => {
     ["SELECT '{}' ->> '$.id'", 'SQL_JSON_OPERATOR_TEMPORARILY_GATED'],
     ['INSERT INTO accounts SELECT * FROM archived_accounts', 'SQL_INSERT_SELECT_TEMPORARILY_GATED'],
     ['UPDATE accounts SET value = source.value FROM source WHERE source.id = accounts.id', 'SQL_ORDER_SENSITIVE_UPDATE_TEMPORARILY_GATED'],
+    ['CREATE TABLE copied AS SELECT id FROM accounts', 'SQL_CREATE_TABLE_AS_SELECT_TEMPORARILY_GATED'],
+    ["UPDATE OR REPLACE accounts SET value = 'next'", 'SQL_ORDER_SENSITIVE_UPDATE_TEMPORARILY_GATED'],
     ['CREATE TEMP TABLE x (id)', 'SQL_TEMP_OBJECT_PROHIBITED'],
     ['DROP TABLE chronolog_transactions', 'SQL_PROTECTED_OBJECT_NAME'],
     ['SELECT * FROM dolt_log', 'SQL_PROTECTED_OBJECT_READ'],

@@ -1,4 +1,4 @@
-import { canonicalJsonToText, type LogicalValue } from '@chronolog/ir'
+import { canonicalJsonToText } from '@chronolog/ir'
 import { formatDecimal } from '@chronolog/kernels'
 import {
   compileSqlStatement,
@@ -22,6 +22,7 @@ import {
   type CanonicalSchemaIdentity,
   type CanonicalSqlValue,
   type SqlPrecondition,
+  type SqlBindingValue,
   type SqlResultMode,
   type SqlStatement,
 } from '@chronolog/protocol'
@@ -419,7 +420,7 @@ function bindingValues(compiled: CompiledSqlSource): unknown[] {
   return orderedSqlBindingValues(compiled).map(logicalValueToDatabaseValue)
 }
 
-function logicalValueToDatabaseValue(value: LogicalValue): unknown {
+function logicalValueToDatabaseValue(value: SqlBindingValue): unknown {
   switch (value.kind) {
     case 'null': return null
     case 'boolean': return value.value ? 1n : 0n
@@ -429,6 +430,7 @@ function logicalValueToDatabaseValue(value: LogicalValue): unknown {
     case 'blob': case 'uuid': return Uint8Array.from(value.bytes)
     case 'json': return canonicalJsonToText(value.value)
     case 'vector': return Uint8Array.from(value.bytes)
+    case 'real': return canonicalRealToNumber(value)
   }
 }
 

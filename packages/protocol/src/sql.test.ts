@@ -11,12 +11,15 @@ import {
   digestTransactionResultEnvelope,
   digestCanonicalSqlResult,
   encodeCanonicalSqlResult,
+  decodeSqlBindingValue,
   encodeSqlRejectionAttribution,
+  encodeSqlBindingValue,
   encodeSqlTransactionProgram,
   encodeTransactionCore,
   encodeTransactionResultEnvelope,
   canonicalRealToNumber,
   numberToCanonicalReal,
+  numberToSqlRealBinding,
   type SqlTransactionProgram,
   type TransactionCore,
   type TransactionResultEnvelopeV1,
@@ -44,6 +47,15 @@ const program: SqlTransactionProgram = {
 }
 
 describe('canonical deterministic SQL protocol', () => {
+  it('round-trips finite REAL bindings by exact binary64 bits', () => {
+    const negativeZero = numberToSqlRealBinding(-0)
+    expect(decodeSqlBindingValue(encodeSqlBindingValue(negativeZero))).toEqual(negativeZero)
+    if (negativeZero.kind === 'real') {
+      expect(Object.is(canonicalRealToNumber(negativeZero), -0)).toBe(true)
+    }
+    expect(() => numberToSqlRealBinding(Infinity)).toThrow(/finite/u)
+  })
+
   it('round-trips exact SQL, binding tokens, and a transaction core without a schema digest', () => {
     expect(decodeSqlTransactionProgram(encodeSqlTransactionProgram(program))).toEqual(program)
     const core: TransactionCore = {

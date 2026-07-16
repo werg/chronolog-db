@@ -104,7 +104,7 @@ Acceptance:
 
 ## Project 6 — Deterministic SQL row-choice expansion
 
-Status: in progress
+Status: complete
 
 - Add canonical REAL input bindings.
 - Complete scalar subqueries and nested/unordered `LIMIT` proofs.
@@ -114,14 +114,14 @@ Status: in progress
 
 Acceptance:
 
-- [ ] Each enabled surface has compiler, reference, replay, result, and fault
+- [x] Each enabled surface has compiler, reference, replay, result, and fault
       fixtures.
-- [ ] Corresponding ledger entries move from `temporarily_gated` only after
+- [x] Corresponding ledger entries move from `temporarily_gated` only after
       those fixtures pass.
 
 ## Project 7 — Aggregates, compounds, and windows
 
-Status: pending
+Status: in progress
 
 - Determinize `DISTINCT`, `GROUP BY`, representative-sensitive `MIN`/`MAX`,
   distinct compounds, windows, and ordered/order-sensitive aggregates.

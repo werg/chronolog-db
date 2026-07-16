@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto'
 
 import { sha256, utf8 } from '@chronolog/canonical'
-import { decodeLogicalValue, encodeLogicalValue } from '@chronolog/ir'
 import {
+  decodeSqlBindingValue,
+  encodeSqlBindingValue,
   decodeCanonicalSqlResult,
   decodeCanonicalSchemaIdentity,
   decodeTransactionResultEnvelope,
@@ -863,7 +864,7 @@ function decodeStatement(value: RpcSqlStatement): SqlStatement {
       parameter: binding.parameter.kind === 'index'
         ? { kind: 'index' as const, index: binding.parameter.index }
         : { kind: 'name' as const, name: binding.parameter.name },
-      value: decodeCanonical('logical binding value', () => decodeLogicalValue(fromBase64Url(binding.canonicalValue))),
+      value: decodeCanonical('SQL binding value', () => decodeSqlBindingValue(fromBase64Url(binding.canonicalValue))),
     })),
   }
 }
@@ -875,7 +876,7 @@ function encodeStatement(value: SqlStatement): RpcSqlStatement {
       parameter: binding.parameter.kind === 'index'
         ? { kind: 'index' as const, index: binding.parameter.index }
         : { kind: 'name' as const, name: binding.parameter.name },
-      canonicalValue: toBase64Url(encodeLogicalValue(binding.value)),
+      canonicalValue: toBase64Url(encodeSqlBindingValue(binding.value)),
     })),
   }
 }

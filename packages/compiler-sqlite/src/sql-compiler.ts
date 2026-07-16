@@ -1,7 +1,9 @@
-import { encodeLogicalValue, isReservedSchemaObjectName, type LogicalValue } from '@chronolog/ir'
+import { isReservedSchemaObjectName } from '@chronolog/ir'
 import {
+  encodeSqlBindingValue,
   equalBytes,
   type SqlBinding,
+  type SqlBindingValue,
   type SqlResultMode,
   type SqlStatement,
   type SqlStatementClass,
@@ -181,8 +183,8 @@ export function compileSqlStatement(
   }
 }
 
-export function orderedSqlBindingValues(compiled: CompiledSqlSource): readonly LogicalValue[] {
-  const values: Array<LogicalValue | undefined> = Array.from(
+export function orderedSqlBindingValues(compiled: CompiledSqlSource): readonly SqlBindingValue[] {
+  const values: Array<SqlBindingValue | undefined> = Array.from(
     { length: compiled.maximumParameterIndex },
     () => undefined,
   )
@@ -198,7 +200,7 @@ export function orderedSqlBindingValues(compiled: CompiledSqlSource): readonly L
       throw new SqlCompilerError('SQL_BINDING_PARAMETER_NOT_FOUND')
     }
     const known = values[index - 1]
-    if (known !== undefined && !equalBytes(encodeLogicalValue(known), encodeLogicalValue(binding.value))) {
+    if (known !== undefined && !equalBytes(encodeSqlBindingValue(known), encodeSqlBindingValue(binding.value))) {
       throw new SqlCompilerError('SQL_BINDING_CONFLICT')
     }
     values[index - 1] = binding.value
@@ -339,7 +341,7 @@ function validateDeterministicExpressions(ast: Stmt, sql: string): void {
       },
       Select(node) {
         const topLevelResult = ast.type === 'SelectStmt' && node === ast.body
-        if (node.limit !== undefined && (!topLevelResult || node.orderBy === undefined)) {
+        if (node.limit !== undefined && !isProvablyAtMostOneRow(node) && (!topLevelResult || node.orderBy === undefined)) {
           throw compilerError('SQL_UNORDERED_LIMIT_TEMPORARILY_GATED', sql, node.limit)
         }
         if (node.select.type === 'SelectFrom' && (
@@ -350,7 +352,9 @@ function validateDeterministicExpressions(ast: Stmt, sql: string): void {
         }
       },
       SubqueryExpr(node) {
-        throw compilerError('SQL_SCALAR_SUBQUERY_TEMPORARILY_GATED', sql, node)
+        if (!isProvablyAtMostOneRow(node.select)) {
+          throw compilerError('SQL_SCALAR_SUBQUERY_TEMPORARILY_GATED', sql, node)
+        }
       },
       TableCallSelectTable(node) {
         const name = asciiLower(node.tblName.objName.text)
@@ -409,15 +413,38 @@ function validateOrderSensitiveMutation(ast: Stmt, sql: string, hasPrivatePlan: 
   if ((ast.type === 'UpdateStmt' || ast.type === 'DeleteStmt') && (
     ast.orderBy !== undefined || ast.limit !== undefined
   ) && !hasPrivatePlan) throw compilerError('SQL_ORDERED_MUTATION_TEMPORARILY_GATED', sql, ast)
-  if (ast.type === 'UpdateStmt' && (ast.from !== undefined || ast.orConflict !== undefined)) {
+  if (ast.type === 'UpdateStmt' && (
+    (ast.from !== undefined && !isProvablySingletonFrom(ast.from)) ||
+    (ast.orConflict !== undefined && ast.orConflict !== 'Abort')
+  )) {
     throw compilerError('SQL_ORDER_SENSITIVE_UPDATE_TEMPORARILY_GATED', sql, ast)
   }
-  if (ast.type === 'InsertStmt' && ast.body.type === 'SelectInsertBody' && ast.body.select.select.type !== 'SelectValues') {
+  if (ast.type === 'InsertStmt' && ast.body.type === 'SelectInsertBody' &&
+      ast.body.select.select.type !== 'SelectValues' && !isProvablyAtMostOneRow(ast.body.select)) {
     throw compilerError('SQL_INSERT_SELECT_TEMPORARILY_GATED', sql, ast.body)
   }
-  if (ast.type === 'CreateTableStmt' && ast.body.type === 'AsSelectCreateTableBody') {
+  if (ast.type === 'CreateTableStmt' && ast.body.type === 'AsSelectCreateTableBody' &&
+      !isProvablyAtMostOneRow(ast.body.select)) {
     throw compilerError('SQL_CREATE_TABLE_AS_SELECT_TEMPORARILY_GATED', sql, ast.body)
   }
+}
+
+/**
+ * Syntactic cardinality proof used where SQLite otherwise chooses an arbitrary
+ * row. A SELECT without FROM and a single VALUES row can produce at most one
+ * row regardless of WHERE, LIMIT, or OFFSET. Broader proofs require catalog
+ * uniqueness and remain gated.
+ */
+function isProvablyAtMostOneRow(select: Select): boolean {
+  if (select.compounds !== undefined && select.compounds.length > 0) return false
+  if (select.select.type === 'SelectValues') return select.select.values.length <= 1
+  return select.select.type === 'SelectFrom' && select.select.from === undefined
+}
+
+function isProvablySingletonFrom(from: NonNullable<Extract<Stmt, { type: 'UpdateStmt' }>['from']>): boolean {
+  const source = from.select
+  return from.joins === undefined && source?.type === 'SelectSelectTable' &&
+    isProvablyAtMostOneRow(source.select)
 }
 
 interface OrderedMutationSyntax {
@@ -699,7 +726,7 @@ function validateBindings(
   maximumParameterIndex: number,
 ): void {
   const names = new Map(parameters.flatMap((parameter) => parameter.names.map((name) => [name, parameter.index] as const)))
-  const values = new Map<number, LogicalValue>()
+  const values = new Map<number, SqlBindingValue>()
   for (const binding of bindings) {
     const index = binding.parameter.kind === 'index'
       ? binding.parameter.index
@@ -708,7 +735,7 @@ function validateBindings(
       throw new SqlCompilerError('SQL_BINDING_PARAMETER_NOT_FOUND')
     }
     const previous = values.get(index)
-    if (previous !== undefined && !equalBytes(encodeLogicalValue(previous), encodeLogicalValue(binding.value))) {
+    if (previous !== undefined && !equalBytes(encodeSqlBindingValue(previous), encodeSqlBindingValue(binding.value))) {
       throw new SqlCompilerError('SQL_BINDING_CONFLICT')
     }
     values.set(index, binding.value)

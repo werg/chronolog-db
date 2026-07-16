@@ -254,8 +254,12 @@ interface SqlBinding {
   readonly parameter:
     | { readonly kind: 'index'; readonly index: number }
     | { readonly kind: 'name'; readonly name: string }
-  readonly value: LogicalValue
+  readonly value: SqlBindingValue
 }
+
+type SqlBindingValue =
+  | LogicalValue
+  | { readonly kind: 'real'; readonly bits: Uint8Array }
 
 interface SqlPrecondition {
   readonly id: number
@@ -322,11 +326,14 @@ The compiler MUST reject:
 - a binding for a nonexistent parameter;
 - conflicting values for aliases of the same SQLite parameter index;
 - an unbound referenced parameter;
-- duplicate bindings that do not encode the identical logical value; and
+- duplicate bindings that do not encode the identical canonical binding value; and
 - values that cannot be represented under the active value profile.
 
-Bindings carry canonical logical values, not JavaScript or native SQLite
-values. Lowering to SQLite storage values is part of the execution profile.
+Bindings carry canonical values, not JavaScript or native SQLite values.
+Logical values retain their existing canonical encoding. A storage REAL uses
+the reserved binding tuple `[11, ieee754_binary64_be_8]`; only finite binary64
+bits are accepted and negative zero is preserved. Lowering to SQLite storage
+values is part of the execution profile.
 
 ### 6.4 Preconditions
 
@@ -791,9 +798,10 @@ independent proof. Every consensus function implementation requires:
 
 ### 12.1 Canonical bindings
 
-Signed bindings use Chronolog canonical logical values. SQLite literals remain
-available, but the compiler MUST define their exact parsing, range, affinity,
-and storage behavior through the pinned SQLite profile.
+Signed bindings use Chronolog canonical binding values: the logical-value
+profile plus finite exact-bit binary64 REAL. SQLite literals remain available,
+but the compiler MUST define their exact parsing, range, affinity, and storage
+behavior through the pinned SQLite profile.
 
 ### 12.2 Integers
 

@@ -36,8 +36,11 @@ export interface SqlBinding {
   readonly parameter:
     | { readonly kind: 'index'; readonly index: number }
     | { readonly kind: 'name'; readonly name: string }
-  readonly value: LogicalValue
+  readonly value: SqlBindingValue
 }
+
+/** Canonical consensus parameter values. REAL is stored as exact binary64 bits. */
+export type SqlBindingValue = LogicalValue | { readonly kind: 'real'; readonly bits: Uint8Array }
 
 export interface SqlPrecondition {
   readonly id: number
@@ -184,7 +187,7 @@ function logicalBindingToCbor(binding: SqlBinding): CborValue {
   if (binding.parameter.kind === 'name') {
     protocolInvariant(/^[:@$].+/u.test(binding.parameter.name), 'SCHEMA_INVALID', 'Named SQL bindings must retain their SQLite prefix')
   }
-  return [parameter, logicalValueToCanonicalCbor(binding.value)]
+  return [parameter, sqlBindingValueToCanonicalCbor(binding.value)]
 }
 
 function logicalBindingFromCbor(value: CborValue, name: string): SqlBinding {
@@ -200,7 +203,36 @@ function logicalBindingFromCbor(value: CborValue, name: string): SqlBinding {
       : null
   protocolInvariant(decoded !== null, 'SCHEMA_INVALID', `${name}.parameter has unknown kind`)
   if (decoded.kind === 'name') protocolInvariant(/^[:@$].+/u.test(decoded.name), 'SCHEMA_INVALID', `${name}.parameter.name is not an exact SQLite parameter token`)
-  return { parameter: decoded, value: logicalValueFromCanonicalCbor(tuple[1] ?? null) }
+  return { parameter: decoded, value: sqlBindingValueFromCanonicalCbor(tuple[1] ?? null) }
+}
+
+export function sqlBindingValueToCanonicalCbor(value: SqlBindingValue): CborValue {
+  return value.kind === 'real'
+    ? [11n, finiteRealBits(value.bits, 'SQL REAL binding bits')]
+    : logicalValueToCanonicalCbor(value)
+}
+
+export function sqlBindingValueFromCanonicalCbor(value: CborValue): SqlBindingValue {
+  const tuple = expectArray(value, 'sql_binding_value')
+  if (tuple.length === 2 && tuple[0] === 11n) {
+    return { kind: 'real', bits: Uint8Array.from(finiteRealBits(expectBytes(tuple[1] ?? null, 'SQL REAL binding bits', 8), 'SQL REAL binding bits')) }
+  }
+  return logicalValueFromCanonicalCbor(value)
+}
+
+export function encodeSqlBindingValue(value: SqlBindingValue): Uint8Array {
+  return encodeCanonicalCbor(sqlBindingValueToCanonicalCbor(value))
+}
+
+export function decodeSqlBindingValue(bytes: Uint8Array): SqlBindingValue {
+  return sqlBindingValueFromCanonicalCbor(assertCanonicalCbor(bytes))
+}
+
+export function numberToSqlRealBinding(value: number): SqlBindingValue {
+  protocolInvariant(Number.isFinite(value), 'SCHEMA_INVALID', 'SQL REAL binding must be finite')
+  const bits = new Uint8Array(8)
+  new DataView(bits.buffer).setFloat64(0, value, false)
+  return { kind: 'real', bits }
 }
 
 export function sqlStatementToCanonicalCbor(value: SqlStatement): CborValue {

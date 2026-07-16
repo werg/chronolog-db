@@ -7,12 +7,13 @@ import {
   SQLITE_PARSER_BASELINE,
   SqlCompilerError,
 } from '@chronolog/compiler-sqlite'
+import { numberToSqlRealBinding } from '@chronolog/protocol'
 import { DatabaseSync } from '@dolthub/doltlite'
 
 type JsonScalar = null | boolean | number | string
 
 interface CorpusBinding {
-  readonly kind: 'integer' | 'text' | 'null'
+  readonly kind: 'integer' | 'real' | 'text' | 'null'
   readonly value?: string
 }
 
@@ -129,6 +130,8 @@ function runFixture(database: DatabaseSync, fixture: CorpusFixture): Differentia
         parameter: { kind: 'index' as const, index: index + 1 },
         value: binding.kind === 'integer'
           ? { kind: 'int64' as const, value: BigInt(binding.value ?? '0') }
+          : binding.kind === 'real'
+            ? numberToSqlRealBinding(Number(binding.value ?? '0'))
           : binding.kind === 'text'
             ? { kind: 'text' as const, utf8: new TextEncoder().encode(binding.value ?? '') }
             : { kind: 'null' as const },
@@ -213,6 +216,7 @@ function createFixtureDatabase(): DatabaseSync {
 
 function runtimeBinding(binding: CorpusBinding): unknown {
   if (binding.kind === 'integer') return BigInt(binding.value ?? '0')
+  if (binding.kind === 'real') return Number(binding.value ?? '0')
   if (binding.kind === 'text') return binding.value ?? ''
   return null
 }

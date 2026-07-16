@@ -30,7 +30,7 @@ export interface RpcSqlBinding {
   readonly parameter:
     | { readonly kind: 'index'; readonly index: number }
     | { readonly kind: 'name'; readonly name: string }
-  /** Canonical LogicalValue CBOR, base64url encoded. */
+  /** Canonical SqlBindingValue CBOR, base64url encoded. */
   readonly canonicalValue: CanonicalBytes
 }
 

@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { createCoreExecutionManifest } from '@chronolog/compiler-sqlite'
 import {
   encodeTransactionCore,
+  numberToSqlRealBinding,
   transactionDigest,
   utf8,
   type SqlBinding,
@@ -54,6 +55,99 @@ describe('SQL-first DoltLite materialization', () => {
       { resultMode: 'ordered' },
     )
     expect(observedCatalog.result.rows).toHaveLength(2)
+    materializer.close()
+  })
+
+  it('binds canonical finite REAL values and replays their exact result', async () => {
+    const { path, manifest } = await fixture()
+    let materializer = await DeterministicMaterializer.open({ path, executionManifest: manifest, checkpointEvery: 1 })
+    const realValue = numberToSqlRealBinding(1.25)
+    const write = await transaction(1n, 'real-binding', {
+      version: 1,
+      preconditions: [{
+        id: 2,
+        query: statement('SELECT typeof(?) = \'real\'', [{ parameter: { kind: 'index', index: 1 }, value: realValue }]),
+        resultMode: 'scalar',
+        expectation: { kind: 'assert_true' },
+      }],
+      body: [
+        statement('CREATE TABLE measurements (id INTEGER PRIMARY KEY, value REAL NOT NULL) STRICT'),
+        statement('INSERT INTO measurements VALUES (1, ?) RETURNING value', [
+          { parameter: { kind: 'index', index: 1 }, value: realValue },
+        ]),
+      ],
+    }, materializer.executionManifestDigest)
+    await materializer.materialize([write])
+    expect(materializer.outcome(write.txId)?.outcome).toBe('accepted')
+    expect(materializer.transactionResult(write.txId)?.statements[1]?.result?.rows).toEqual([[
+      numberToSqlRealBinding(1.25),
+    ]])
+    materializer.close()
+
+    materializer = await DeterministicMaterializer.open({ path, executionManifest: manifest, checkpointEvery: 1 })
+    expect(materializer.transactionResult(write.txId)?.statements[1]?.result?.rows).toEqual([[
+      numberToSqlRealBinding(1.25),
+    ]])
+    materializer.close()
+  })
+
+  it('executes and replays syntactically singleton row-choice forms while faulting unproven input', async () => {
+    const { path, manifest } = await fixture()
+    let materializer = await DeterministicMaterializer.open({ path, executionManifest: manifest, checkpointEvery: 1 })
+    const proven = await transaction(1n, 'proven-row-choice', {
+      version: 1,
+      preconditions: [{
+        id: 3,
+        query: statement('SELECT (SELECT 1) LIMIT 1'),
+        resultMode: 'scalar',
+        expectation: { kind: 'assert_true' },
+      }],
+      body: [
+        statement('CREATE TABLE selected_accounts (id INTEGER PRIMARY KEY, value TEXT NOT NULL) STRICT'),
+        statement("INSERT INTO selected_accounts SELECT 1, 'one' RETURNING id, value"),
+        statement("UPDATE selected_accounts SET value = source.value FROM (SELECT 'updated' AS value) AS source RETURNING id, value"),
+        statement("UPDATE OR ABORT selected_accounts SET value = 'final' WHERE id = 1"),
+        statement("CREATE TABLE singleton_snapshot AS SELECT 1 AS id, (SELECT 'final') AS value LIMIT 1"),
+        statement('SELECT (SELECT value) FROM singleton_snapshot'),
+      ],
+    }, materializer.executionManifestDigest)
+    await materializer.materialize([proven])
+    expect(materializer.outcome(proven.txId)?.outcome).toBe('accepted')
+    expect(materializer.transactionResult(proven.txId)?.statements[1]).toMatchObject({
+      affectedRows: 1n,
+      result: { rows: [[{ kind: 'integer', value: 1n }, { kind: 'text', utf8: utf8('one') }]] },
+    })
+    expect(materializer.transactionResult(proven.txId)?.statements[2]).toMatchObject({
+      affectedRows: 1n,
+      result: { rows: [[{ kind: 'integer', value: 1n }, { kind: 'text', utf8: utf8('updated') }]] },
+    })
+    expect(materializer.transactionResult(proven.txId)?.statements[5]?.result?.rows).toEqual([[
+      { kind: 'text', utf8: utf8('final') },
+    ]])
+
+    const fault = await transaction(2n, 'unproven-row-choice', {
+      version: 1,
+      preconditions: [truePrecondition()],
+      body: [
+        statement('CREATE TABLE row_choice_rollback (id INTEGER PRIMARY KEY) STRICT'),
+        statement('INSERT INTO selected_accounts SELECT id, value FROM selected_accounts'),
+      ],
+    }, materializer.executionManifestDigest)
+    await expect(materializer.materialize([proven, fault])).rejects.toMatchObject({
+      code: 'SQL_INSERT_SELECT_TEMPORARILY_GATED',
+    })
+    expect(materializer.outcome(fault.txId)).toBeNull()
+    expect(() => materializer.localSql('SELECT * FROM row_choice_rollback')).toThrow()
+    materializer.close()
+
+    materializer = await DeterministicMaterializer.open({ path, executionManifest: manifest, checkpointEvery: 1 })
+    expect(materializer.localSql('SELECT id, value FROM selected_accounts')).toMatchObject({
+      columns: [{ name: 'id' }, { name: 'value' }],
+      rows: [[{ kind: 'integer', value: '1' }, { kind: 'text', value: 'final' }]],
+    })
+    expect(materializer.transactionResult(proven.txId)?.statements[5]?.result?.rows).toEqual([[
+      { kind: 'text', utf8: utf8('final') },
+    ]])
     materializer.close()
   })
 

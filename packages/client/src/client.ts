@@ -1,11 +1,14 @@
-import { encodeLogicalValue, type LogicalValue } from '@chronolog/ir'
+import type { LogicalValue } from '@chronolog/ir'
 import {
   decodeCanonicalSqlResult,
   decodeTransactionResultEnvelope,
   digestTransactionResultEnvelope,
+  encodeSqlBindingValue,
+  numberToSqlRealBinding,
   type CanonicalSqlColumn,
   type CanonicalSqlResult,
   type CanonicalSqlValue,
+  type SqlBindingValue,
   type SqlResultMode,
   type TransactionResultEnvelopeV1,
 } from '@chronolog/protocol'
@@ -654,7 +657,7 @@ function encodeConsensusStatement(statement: CompiledSqlStatement): RpcSqlStatem
     sql: statement.sql,
     bindings: normalizeConsensusBindings(statement.sql, statement.parameters ?? []).map((binding) => ({
       parameter: binding.parameter,
-      canonicalValue: toBase64Url(encodeLogicalValue(toLogicalValue(binding.value))),
+      canonicalValue: toBase64Url(encodeSqlBindingValue(toSqlBindingValue(binding.value))),
     })),
   }
 }
@@ -682,14 +685,14 @@ function normalizeConsensusBindings(sql: string, bindings: ClientSqlBindings): r
   return result
 }
 
-function toLogicalValue(value: ClientSqlValue): LogicalValue {
+function toSqlBindingValue(value: ClientSqlValue): SqlBindingValue {
   if (typeof value === 'object' && value !== null && 'kind' in value) return value
   if (value === null) return { kind: 'null' }
   if (typeof value === 'boolean') return boolean(value)
   if (typeof value === 'bigint') return int64(value)
   if (typeof value === 'number') {
-    if (!Number.isSafeInteger(value)) throw new TypeError('Consensus SQL number bindings must be exact safe integers')
-    return int64(value)
+    if (!Number.isFinite(value)) throw new TypeError('Consensus SQL REAL bindings must be finite')
+    return Number.isSafeInteger(value) ? int64(value) : numberToSqlRealBinding(value)
   }
   if (typeof value === 'string') return text(value)
   if (value instanceof Uint8Array) return blob(value)

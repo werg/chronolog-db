@@ -196,7 +196,8 @@ describe('SQL client → RPC → node → reducer', () => {
       tx.assert('SELECT 1')
       tx.exec('CREATE TABLE dynamic_values (value)')
       returning = tx.exec(
-        "INSERT INTO dynamic_values VALUES (NULL), (42), (1.5), ('Grüße'), (X'00FF') RETURNING value",
+        "INSERT INTO dynamic_values VALUES (NULL), (42), (?), ('Grüße'), (X'00FF') RETURNING value",
+        [1.5],
       )
       tx.exec('ALTER TABLE dynamic_values ADD COLUMN note TEXT')
     })

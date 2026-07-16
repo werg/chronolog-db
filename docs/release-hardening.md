@@ -60,18 +60,35 @@ authorizer, and publication-crash integration tests. It mutates the local
 native build and should run in a clean CI checkout or disposable worktree. A
 normal `pnpm install --force` restores the pinned non-sanitized dependency.
 
-## SBOM and provenance
+## Native distribution, SBOM, and provenance
 
 ```sh
+pnpm release:distribution
+pnpm test:distribution-upgrade
 pnpm release:metadata
 ```
 
-The command builds the repository, emits a CycloneDX 1.6 component inventory,
-and writes an in-toto/SLSA provenance statement covering every compiled file
-and native patch. Dependency identity is tied to the exact pnpm lock digest.
-Tag and manual release workflows run production conformance on Linux and macOS,
-generate the metadata, and request GitHub OIDC build-provenance attestations.
-These are release-evidence artifacts, not yet an installable distribution.
+The distribution command requires a clean worktree and uses pnpm's isolated
+deployment to assemble the daemon, online CLI, custody tool, offline recovery
+CLI, TypeScript runtime, and native dependencies for the current OS and
+architecture. It rejects escaping symlinks, records every regular file's hash
+and size, emits a relocatable tar archive, and includes `chronolog-verify` for
+post-extraction verification. Node.js 22 or later remains a host prerequisite.
+
+The upgrade drill verifies the package, starts it on a fresh persistent data
+directory, checks health and CLI status, stops cleanly, verifies the replacement
+package, and reopens the same identity, SSB feed, execution manifest,
+governance revision, and epoch. With no prior published release, the default
+drill is same-build package replacement; pass `--from` and `--to` to the tool
+for the mandatory previous-release-to-candidate drill once a prior artifact
+exists.
+
+Metadata generation builds the repository, emits a CycloneDX 1.6 component
+inventory, and writes an in-toto/SLSA provenance statement covering compiled
+files, native patches, and distribution artifacts. Dependency identity is tied
+to the exact pnpm lock digest. Tag and manual release workflows run production
+conformance and the package/upgrade drill on Linux and macOS, then request
+GitHub OIDC build-provenance attestations over the archive and evidence.
 
 ## OS-backed key custody
 
@@ -109,8 +126,9 @@ and cross-node blob fetching remain disabled release gates.
 
 ## Outstanding release gates
 
-- signed, platform-specific installation artifacts and verified upgrade paths
-  (SBOM, provenance generation, and CI attestations are implemented);
+- previous-release-to-candidate upgrade evidence (self-verifying Linux/macOS
+  artifacts, same-build replacement, SBOM, provenance, and CI attestations are
+  implemented);
 - macOS/Windows OS key providers and hardware-backed custody policy (Linux
   Secret Service migration and independent recovery export/sign/purge tooling
   are implemented; the pilot ceremony remains required);

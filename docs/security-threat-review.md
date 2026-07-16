@@ -44,7 +44,7 @@ The principal boundaries are:
 | Blob substitution or truncation | Per-chunk and total domain-separated digests, bounded resolution, content-addressed stores | No production cross-node chunk fetch protocol; blob mode is not active by default |
 | Snapshot rollback or foreign-state import | Authorized signature, group/manifest match, minimum revision, exact DB/log/feed-head identities | Archive export/import and atomic replacement workflow remain open |
 | RPC credential disclosure or unauthenticated remote bind | Remote bind requires bearer token; timing-safe comparison; metrics share authentication | Bearer tokens need deployment TLS/secret rotation outside this process |
-| Dependency/build substitution | Pinned lockfile, native source checksum/patches, SBOM, subject hashes, OIDC provenance attestations | Installable platform distributions are not yet published or upgrade-tested |
+| Dependency/build substitution | Pinned lockfile, native source checksum/patches, clean-worktree native archives, per-file verification, SBOM, subject hashes, package replacement drill, OIDC provenance attestations | A prior-release-to-candidate drill and publication ceremony require an actual earlier release |
 
 ## Findings and disposition
 
@@ -65,8 +65,11 @@ The principal boundaries are:
 - `SEC-005` — NAT discovery trusts an explicitly configured HTTPS service and
   validates one SSB multiserver address. It does not create a port mapping or
   prove reachability; operator/firewall verification remains required.
-- `SEC-006` — Release workflows attest conformance reports, SBOM, and
-  provenance, but there is no installable signed distribution or upgrade test.
+- `SEC-006` — Release workflows now build self-verifying platform archives,
+  attest the archive and evidence, and run a packaged persistent-data
+  replacement drill. Before the first non-bootstrap upgrade, run the same tool
+  from the latest published artifact to the exact candidate; there is no prior
+  release against which that evidence can yet be produced.
 - `SEC-007` — The workerd/CAS implementation remains an experimental contract,
   not an active deployment target.
 - `SEC-008` — Independent security review has not occurred. This is a release

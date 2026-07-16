@@ -7,6 +7,7 @@
     "@chronolog/client": "workspace:*",
     "@chronolog/ir": "workspace:*",
     "@chronolog/migrations": "workspace:*",
-    "@chronolog/rpc": "workspace:*"
+    "@chronolog/rpc": "workspace:*",
+    "tsx": "^4.20.3"
   }
 }

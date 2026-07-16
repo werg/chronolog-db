@@ -183,6 +183,11 @@ provides network-independent canonical payload inspection, isolated signing,
 threshold combination, and verification. The detailed ceremony and its
 mandatory independent-custodian drill are in the governance guide.
 
+`pnpm release:distribution` creates a relocatable, self-verifying native
+archive for the current OS/architecture. `pnpm test:distribution-upgrade`
+exercises the packaged daemon and CLI across a clean stop and package
+replacement while preserving the data directory and protocol identities.
+
 `CHRONOLOG_STATIC_MEMBERSHIP_FILE` remains an explicit legacy/testing override.
 It points every daemon at the same out-of-band JSON snapshot, whose group,
 membership revision, and validation policy must match the corresponding values

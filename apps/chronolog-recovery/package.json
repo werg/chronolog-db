@@ -5,6 +5,7 @@
   "type": "module",
   "dependencies": {
     "@chronolog/capabilities": "workspace:*",
-    "@chronolog/protocol": "workspace:*"
+    "@chronolog/protocol": "workspace:*",
+    "tsx": "^4.20.3"
   }
 }

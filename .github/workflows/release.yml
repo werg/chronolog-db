@@ -27,6 +27,8 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm conformance:production
+      - run: pnpm release:distribution
+      - run: pnpm test:distribution-upgrade
       - run: pnpm release:metadata
       - uses: actions/attest-build-provenance@v3
         with:
@@ -34,6 +36,7 @@ jobs:
             artifacts/release/sbom.cdx.json
             artifacts/release/provenance.intoto.jsonl
             artifacts/conformance/production-native.json
+            artifacts/distribution/*.tar.gz
       - uses: actions/upload-artifact@v6
         with:
           name: release-evidence-${{ matrix.os }}-${{ github.sha }}

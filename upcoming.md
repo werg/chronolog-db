@@ -212,6 +212,9 @@ Progress:
       and CLI workflows that keep content keys inside the daemon.
 - [x] Verified recovery-share export/purge plus network-independent canonical
       prepare/inspect/sign/combine/verify tooling; pilot custodian drill pending.
-- [ ] Installable packaging/upgrades, recorded independent-custodian drill, snapshot-backed
+- [x] Self-verifying Linux/macOS native package assembly, OIDC-attested archive
+      evidence, and packaged persistent-data replacement drill; cross-version
+      evidence waits for the first prior release artifact.
+- [ ] Recorded independent-custodian drill, snapshot-backed
       repair/import, remote blob fetch, verified traversal, pilot runbooks, and
       external assessment.

@@ -42,7 +42,7 @@ const sbom = {
   components,
 }
 
-const subjects = await collectSubjects(['dist', 'patches'])
+const subjects = await collectSubjects(['dist', 'patches', 'artifacts/distribution'])
 const provenance = {
   _type: 'https://in-toto.io/Statement/v1',
   subject: subjects.map((subject) => ({
@@ -148,7 +148,10 @@ async function collectSubjects(directories: readonly string[]): Promise<readonly
 }
 
 async function walk(path: string, result: { path: string; sha256: string }[]): Promise<void> {
-  for (const entry of await readdir(path, { withFileTypes: true })) {
+  let entries
+  try { entries = await readdir(path, { withFileTypes: true }) }
+  catch (error) { if (isMissing(error)) return; throw error }
+  for (const entry of entries) {
     const child = join(path, entry.name)
     if (entry.isDirectory()) await walk(child, result)
     else if (entry.isFile()) result.push({

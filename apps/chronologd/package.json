@@ -13,6 +13,7 @@
     "@chronolog/node-core": "workspace:*",
     "@chronolog/protocol": "workspace:*",
     "@chronolog/rpc": "workspace:*",
-    "@chronolog/transport-ssb": "workspace:*"
+    "@chronolog/transport-ssb": "workspace:*",
+    "tsx": "^4.20.3"
   }
 }

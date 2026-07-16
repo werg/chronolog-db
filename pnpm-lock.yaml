@@ -94,6 +94,9 @@ importers:
       '@chronolog/rpc':
         specifier: workspace:*
         version: link:../../packages/rpc
+      tsx:
+        specifier: ^4.20.3
+        version: 4.23.1
 
   apps/chronolog-recovery:
     dependencies:
@@ -103,6 +106,9 @@ importers:
       '@chronolog/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
+      tsx:
+        specifier: ^4.20.3
+        version: 4.23.1
 
   apps/chronologd:
     dependencies:
@@ -136,6 +142,24 @@ importers:
       '@chronolog/transport-ssb':
         specifier: workspace:*
         version: link:../../packages/transport-ssb
+      tsx:
+        specifier: ^4.20.3
+        version: 4.23.1
+
+  apps/distribution:
+    dependencies:
+      chronolog-cli:
+        specifier: workspace:*
+        version: link:../chronolog
+      chronolog-recovery-cli:
+        specifier: workspace:*
+        version: link:../chronolog-recovery
+      chronologd:
+        specifier: workspace:*
+        version: link:../chronologd
+      tsx:
+        specifier: ^4.20.3
+        version: 4.23.1
 
   packages/canonical: {}
 

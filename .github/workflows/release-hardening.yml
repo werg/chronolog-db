@@ -1,0 +1,45 @@
+name: Release hardening
+
+on:
+  schedule:
+    - cron: '43 2 * * 2'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz-and-soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test:fuzz
+      - run: pnpm test:publication-crash
+      - run: pnpm test:soak
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: release-characterization-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/release/
+          if-no-files-found: warn
+          retention-days: 30
+
+  native-sanitizers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test:native-sanitizers

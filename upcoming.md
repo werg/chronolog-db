@@ -188,3 +188,13 @@ Acceptance:
 - [ ] Pilot operators can install, onboard, rotate, recover, inspect, and
       upgrade without editing internal stores.
 - [ ] The active manifest advertises no unimplemented or unproven feature.
+
+Progress:
+
+- [x] Deterministic codec/compiler mutation fuzz corpora and scheduled CI.
+- [x] Native ASan/UBSan rebuild runner.
+- [x] Process-level publication crash matrix.
+- [x] Reopen/late-predecessor soak and deterministic/operational
+      characterization report.
+- [ ] Packaging, key custody, operational repair/import/networking, threat
+      review, and external assessment.

@@ -37,7 +37,9 @@ The exact working/gated feature boundary is tracked in
 queue is maintained in [upcoming work](upcoming.md). Container fault and
 load testing is documented in the [chaos testing guide](docs/chaos-testing.md).
 The first pilot targets the native daemon; the rationale and executable gate
-are documented in [production execution](docs/production-execution.md).
+are documented in [production execution](docs/production-execution.md). Slow
+fuzz, sanitizer, crash, soak, and sizing gates are in the
+[release-hardening guide](docs/release-hardening.md).
 
 This is a direct implementation with no legacy transaction decoder, schema
 migration path, state-merge fallback, or alternate SQLite backend. Development

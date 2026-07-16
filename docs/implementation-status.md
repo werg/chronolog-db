@@ -115,14 +115,20 @@ override. Production key custody, packaging, and a polished operator CLI remain
 release-hardening work; the bootstrap recovery keys must not remain co-located
 for a real deployment.
 
+Linux pilots may set `CHRONOLOG_SECRET_STORE=secret-service`; the daemon then
+atomically migrates inline identity, epoch, governance-recipient, and recovery
+private material into Secret Service references and fails closed on missing
+custody. This removes secrets from daemon JSON but does not turn three shares
+held by one OS account into an independent recovery quorum.
+
 ## Release gates outside this prototype
 
 - exact SQLite 3.54 parser synchronization, or continued executable proof of
   the measured 3.53/3.54 compatibility boundary;
 - validation of the configured Linux/macOS portable replay digest comparison,
   plus deterministic resource characterization on release hardware;
-- fuzzing, native sanitizers, signed distributions, OS-backed keystores, and
-  external security review; and
+- signed installable distributions, non-Linux/hardware-backed key providers,
+  and external security review; and
 - feed-fork repair, trusted snapshots, blob manifests, NAT discovery,
   deployment sizing, and production observability.
 

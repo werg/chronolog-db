@@ -166,6 +166,11 @@ schema-administrator, writer, validator, and audit-reader roles and creates a
 must export the recovery keys to independent offline custody before treating a
 group as durable. See the [governance guide](docs/governance.md).
 
+Linux hosts can set `CHRONOLOG_SECRET_STORE=secret-service` (and optionally
+`CHRONOLOG_SECRET_SERVICE`) to migrate daemon and governance private material
+from JSON into an unlocked Secret Service collection. Startup then requires
+that provider and fails closed on a missing reference.
+
 `CHRONOLOG_STATIC_MEMBERSHIP_FILE` remains an explicit legacy/testing override.
 It points every daemon at the same out-of-band JSON snapshot, whose group,
 membership revision, and validation policy must match the corresponding values
@@ -275,7 +280,8 @@ through the deterministic compiler. See the [extension profile](docs/extensions.
 for the native-versus-consensus boundary.
 
 Before production use, the remaining work is operational hardening: a reviewed
-distribution of the small DoltLite authorizer shim, OS-backed keystores,
+and signed distribution of the small DoltLite authorizer shim, non-Linux and
+hardware-backed key providers,
 capability and epoch administration commands in the daemon, blob manifests for
 large payloads, feed-fork quarantine and repair, NAT discovery,
 deployment-specific resource sizing, cross-platform CI, and external security

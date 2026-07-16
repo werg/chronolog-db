@@ -60,10 +60,33 @@ authorizer, and publication-crash integration tests. It mutates the local
 native build and should run in a clean CI checkout or disposable worktree. A
 normal `pnpm install --force` restores the pinned non-sanitized dependency.
 
+## SBOM and provenance
+
+```sh
+pnpm release:metadata
+```
+
+The command builds the repository, emits a CycloneDX 1.6 component inventory,
+and writes an in-toto/SLSA provenance statement covering every compiled file
+and native patch. Dependency identity is tied to the exact pnpm lock digest.
+Tag and manual release workflows run production conformance on Linux and macOS,
+generate the metadata, and request GitHub OIDC build-provenance attestations.
+These are release-evidence artifacts, not yet an installable distribution.
+
+## OS-backed key custody
+
+Linux pilot hosts can set `CHRONOLOG_SECRET_STORE=secret-service` to migrate
+daemon identity, epoch, recipient, and bootstrap-recovery private material out
+of JSON and into the host Secret Service. See the governance guide for host
+requirements, migration behavior, and the remaining requirement to separate
+recovery shares across custodians.
+
 ## Outstanding release gates
 
-- signed, platform-specific installation artifacts and verified upgrade paths;
-- an OS-backed key provider wired into daemon bootstrap and rotation;
+- signed, platform-specific installation artifacts and verified upgrade paths
+  (SBOM, provenance generation, and CI attestations are implemented);
+- macOS/Windows OS key providers and hardware-backed custody policy (Linux
+  Secret Service migration is implemented);
 - feed-fork quarantine/repair, trusted snapshot import/export, and large-payload
   blob manifests;
 - NAT discovery, sizing envelopes, alertable observability, and runbooks;

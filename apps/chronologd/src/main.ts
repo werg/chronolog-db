@@ -22,10 +22,12 @@ import { SsbDb2Transport, type SsbPeer } from '@chronolog/transport-ssb'
 import { fromBase64, loadOrCreateConfig, parseDaemonRuntimeConfig } from './config.js'
 import { loadOrCreateGovernanceBootstrap } from './governance-config.js'
 import { loadStaticMembership } from './static-membership.js'
+import { daemonSecretStoreFromEnvironment } from './secret-store.js'
 
 const dataDirectory = resolve(process.env.CHRONOLOG_DATA_DIR ?? '.chronolog')
 const runtime = parseDaemonRuntimeConfig(process.env)
-const { config, identity } = await loadOrCreateConfig(dataDirectory)
+const secretStore = daemonSecretStoreFromEnvironment(process.env)
+const { config, identity } = await loadOrCreateConfig(dataDirectory, secretStore)
 const groupId = fromBase64(config.groupId)
 const configuredMembershipRevision = fromBase64(config.membershipRevision)
 const configuredValidationPolicy = fromBase64(config.validationPolicy)
@@ -126,6 +128,7 @@ async function startRuntime() {
         schemaId: materializer.executionManifestDigest,
         identity,
         transportAuthor: transport.identity,
+        ...(secretStore === undefined ? {} : { secretStore }),
       })
       governance = await GovernanceControlPlane.create({
         genesis: bootstrap.genesis,

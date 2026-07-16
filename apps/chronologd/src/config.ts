@@ -12,6 +12,7 @@ import {
   verifyDomain,
   type Ed25519KeyPair,
 } from '@chronolog/protocol'
+import type { DaemonSecretStore } from './secret-store.js'
 
 export interface DaemonConfig {
   readonly format: 'chronolog-daemon'
@@ -25,6 +26,14 @@ export interface DaemonConfig {
   readonly publicKey: string
   readonly privateKeyPkcs8: string
 }
+
+interface DaemonConfigV2 extends Omit<DaemonConfig, 'format' | 'epochContentKey' | 'privateKeyPkcs8'> {
+  readonly format: 'chronolog-daemon-v2'
+  readonly epochContentKeyRef: string
+  readonly privateKeyPkcs8Ref: string
+}
+
+type DaemonConfigDocument = DaemonConfig | DaemonConfigV2
 
 export interface LoadedDaemonConfig {
   readonly config: DaemonConfig
@@ -72,16 +81,19 @@ export function parseDaemonRuntimeConfig(environment: NodeJS.ProcessEnv): Daemon
   }
 }
 
-export async function loadOrCreateConfig(dataDirectory: string): Promise<LoadedDaemonConfig> {
+export async function loadOrCreateConfig(
+  dataDirectory: string,
+  secretStore?: DaemonSecretStore,
+): Promise<LoadedDaemonConfig> {
   const path = join(dataDirectory, 'config.json')
-  let config: DaemonConfig
+  let document: DaemonConfigDocument
   try {
-    config = parseConfig(JSON.parse(await readFile(path, 'utf8')))
+    document = parseConfigDocument(JSON.parse(await readFile(path, 'utf8')))
     await chmod(path, 0o600)
   } catch (error) {
     if (!isMissing(error)) throw error
     const identity = await generateEd25519KeyPair()
-    config = {
+    const config: DaemonConfig = {
       format: 'chronolog-daemon',
       groupId: randomBase64(32),
       groupRoute: randomBase64(32),
@@ -93,9 +105,15 @@ export async function loadOrCreateConfig(dataDirectory: string): Promise<LoadedD
       publicKey: toBase64(identity.publicKeyBytes),
       privateKeyPkcs8: toBase64(await exportEd25519PrivateKey(identity.privateKey)),
     }
-    await atomicWrite(path, JSON.stringify(config, null, 2))
+    document = secretStore === undefined ? config : await externalizeConfig(config, secretStore)
+    await atomicWrite(path, JSON.stringify(document, null, 2))
     return { config, identity }
   }
+  if (document.format === 'chronolog-daemon' && secretStore !== undefined) {
+    document = await externalizeConfig(document, secretStore)
+    await atomicWrite(path, JSON.stringify(document, null, 2))
+  }
+  const config = await resolveConfig(document, secretStore)
   const publicKeyBytes = decodeExact(config.publicKey, 32, 'publicKey')
   const publicKey = await importEd25519PublicKey(publicKeyBytes)
   const privateKey = await importEd25519PrivateKey(fromBase64(config.privateKeyPkcs8))
@@ -136,9 +154,12 @@ async function atomicWrite(path: string, contents: string): Promise<void> {
   await syncPath(dirname(path))
 }
 
-function parseConfig(value: unknown): DaemonConfig {
+function parseConfigDocument(value: unknown): DaemonConfigDocument {
   if (!isRecord(value)) throw new Error('DAEMON_CONFIG_INVALID')
-  if (value.format !== 'chronolog-daemon') throw new Error('DAEMON_CONFIG_UNSUPPORTED')
+  if (value.format !== 'chronolog-daemon' && value.format !== 'chronolog-daemon-v2') {
+    throw new Error('DAEMON_CONFIG_UNSUPPORTED')
+  }
+  if (value.format === 'chronolog-daemon-v2') return parseExternalConfig(value)
   const fields = [
     'groupId', 'groupRoute', 'membershipRevision', 'validationPolicy', 'validatorCapability',
     'epoch', 'epochContentKey', 'publicKey', 'privateKeyPkcs8',
@@ -160,6 +181,67 @@ function parseConfig(value: unknown): DaemonConfig {
     throw new Error('DAEMON_CONFIG_EPOCH_INVALID')
   }
   return config
+}
+
+function parseExternalConfig(value: Record<string, unknown>): DaemonConfigV2 {
+  const fields = [
+    'groupId', 'groupRoute', 'membershipRevision', 'validationPolicy', 'validatorCapability',
+    'epoch', 'publicKey', 'epochContentKeyRef', 'privateKeyPkcs8Ref',
+  ] as const
+  const allowed = new Set<string>(['format', ...fields])
+  if (Object.keys(value).some((field) => !allowed.has(field)) ||
+      fields.some((field) => typeof value[field] !== 'string')) throw new Error('DAEMON_CONFIG_INVALID')
+  const config = value as unknown as DaemonConfigV2
+  validatePublicConfig(config)
+  validateSecretReference(config.epochContentKeyRef)
+  validateSecretReference(config.privateKeyPkcs8Ref)
+  return config
+}
+
+function validatePublicConfig(config: Pick<DaemonConfig, 'groupId' | 'groupRoute' | 'membershipRevision' | 'validationPolicy' | 'validatorCapability' | 'epoch' | 'publicKey'>): void {
+  decodeExact(config.groupId, 32, 'groupId')
+  decodeExact(config.groupRoute, 32, 'groupRoute')
+  decodeExact(config.membershipRevision, 32, 'membershipRevision')
+  decodeExact(config.validationPolicy, 32, 'validationPolicy')
+  decodeExact(config.validatorCapability, 32, 'validatorCapability')
+  decodeExact(config.publicKey, 32, 'publicKey')
+  if (!/^[1-9][0-9]*$/u.test(config.epoch) || BigInt(config.epoch) > 0xffff_ffff_ffff_ffffn) {
+    throw new Error('DAEMON_CONFIG_EPOCH_INVALID')
+  }
+}
+
+async function externalizeConfig(config: DaemonConfig, secretStore: DaemonSecretStore): Promise<DaemonConfigV2> {
+  const suffix = Buffer.from(fromBase64(config.groupId)).toString('base64url')
+  const epochContentKeyRef = `groups/${suffix}/epoch/${config.epoch}`
+  const privateKeyPkcs8Ref = `groups/${suffix}/daemon-signing`
+  await secretStore.set(epochContentKeyRef, config.epochContentKey)
+  await secretStore.set(privateKeyPkcs8Ref, config.privateKeyPkcs8)
+  const { epochContentKey: _epochKey, privateKeyPkcs8: _privateKey, format: _format, ...publicConfig } = config
+  return { format: 'chronolog-daemon-v2', ...publicConfig, epochContentKeyRef, privateKeyPkcs8Ref }
+}
+
+async function resolveConfig(
+  document: DaemonConfigDocument,
+  secretStore: DaemonSecretStore | undefined,
+): Promise<DaemonConfig> {
+  if (document.format === 'chronolog-daemon') return document
+  if (secretStore === undefined) throw new Error('DAEMON_SECRET_STORE_REQUIRED')
+  return {
+    format: 'chronolog-daemon',
+    groupId: document.groupId,
+    groupRoute: document.groupRoute,
+    membershipRevision: document.membershipRevision,
+    validationPolicy: document.validationPolicy,
+    validatorCapability: document.validatorCapability,
+    epoch: document.epoch,
+    epochContentKey: await secretStore.get(document.epochContentKeyRef),
+    publicKey: document.publicKey,
+    privateKeyPkcs8: await secretStore.get(document.privateKeyPkcs8Ref),
+  }
+}
+
+function validateSecretReference(reference: string): void {
+  if (!/^[A-Za-z0-9._:/-]{1,256}$/u.test(reference)) throw new Error('DAEMON_CONFIG_SECRET_REFERENCE_INVALID')
 }
 
 function decodeExact(value: string, length: number, field: string): Uint8Array {

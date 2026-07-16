@@ -196,5 +196,9 @@ Progress:
 - [x] Process-level publication crash matrix.
 - [x] Reopen/late-predecessor soak and deterministic/operational
       characterization report.
+- [x] CycloneDX SBOM, in-toto/SLSA provenance, and CI OIDC attestations for
+      Linux/macOS release evidence.
+- [x] Linux Secret Service migration for daemon, epoch, recipient, and
+      bootstrap recovery private material.
 - [ ] Packaging, key custody, operational repair/import/networking, threat
       review, and external assessment.

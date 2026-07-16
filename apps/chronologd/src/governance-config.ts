@@ -20,6 +20,7 @@ import {
   generateEd25519KeyPair,
   type Ed25519KeyPair,
 } from '@chronolog/protocol'
+import type { DaemonSecretStore } from './secret-store.js'
 
 export interface LoadedGovernanceBootstrap {
   readonly genesis: SignedGenesis
@@ -40,6 +41,14 @@ interface GovernanceDocument {
   readonly recoveryPrivateKeysPkcs8: readonly [string, string, string]
 }
 
+interface GovernanceDocumentV2 extends Omit<GovernanceDocument, 'format' | 'recipientPrivateKeyPkcs8' | 'recoveryPrivateKeysPkcs8'> {
+  readonly format: 'chronolog-governance-bootstrap-v2'
+  readonly recipientPrivateKeyRef: string
+  readonly recoveryPrivateKeyRefs: readonly [string, string, string]
+}
+
+type StoredGovernanceDocument = GovernanceDocument | GovernanceDocumentV2
+
 export async function loadOrCreateGovernanceBootstrap(options: {
   readonly dataDirectory: string
   readonly groupId: Uint8Array
@@ -47,9 +56,10 @@ export async function loadOrCreateGovernanceBootstrap(options: {
   readonly identity: Ed25519KeyPair
   readonly transportAuthor: string
   readonly now?: () => number
+  readonly secretStore?: DaemonSecretStore
 }): Promise<LoadedGovernanceBootstrap> {
   const path = join(options.dataDirectory, 'governance.json')
-  let document: GovernanceDocument
+  let document: StoredGovernanceDocument
   try {
     document = parseDocument(JSON.parse(await readFile(path, 'utf8')))
     await chmod(path, 0o600)
@@ -92,7 +102,7 @@ export async function loadOrCreateGovernanceBootstrap(options: {
       createdAtMs: BigInt(Math.trunc(options.now?.() ?? Date.now())),
     }
     const genesis = await signGenesis(manifest, options.identity.privateKey)
-    document = {
+    const inlineDocument: GovernanceDocument = {
       format: 'chronolog-governance-bootstrap-v1',
       signedGenesis: base64(encodeSignedGenesis(genesis)),
       recipientId: base64(options.identity.publicKeyBytes),
@@ -104,23 +114,32 @@ export async function loadOrCreateGovernanceBootstrap(options: {
         base64(await exportEd25519PrivateKey(recovery[2].privateKey)),
       ],
     }
+    document = options.secretStore === undefined
+      ? inlineDocument
+      : await externalizeDocument(inlineDocument, options.groupId, options.secretStore)
     await atomicWrite(path, `${JSON.stringify(document, null, 2)}\n`)
   }
-  const genesis = decodeSignedGenesis(unbase64(document.signedGenesis))
+  if (document.format === 'chronolog-governance-bootstrap-v1' && options.secretStore !== undefined) {
+    document = await externalizeDocument(document, options.groupId, options.secretStore)
+    await atomicWrite(path, `${JSON.stringify(document, null, 2)}\n`)
+  }
+  const resolved = await resolveDocument(document, options.secretStore)
+  const genesis = decodeSignedGenesis(unbase64(resolved.signedGenesis))
   if (!sameBytes(genesis.manifest.groupId, options.groupId)) throw new Error('GOVERNANCE_GROUP_MISMATCH')
   return {
     genesis,
     validationPolicyId: await validationPolicyId(genesis.manifest.validationPolicies[0]!),
-    recipientId: unbase64(document.recipientId),
-    recipientPublicKey: unbase64(document.recipientPublicKey),
-    recipientPrivateKey: await importX25519PrivateKey(unbase64(document.recipientPrivateKeyPkcs8), false),
-    recoveryPrivateKeysPkcs8: document.recoveryPrivateKeysPkcs8.map(unbase64) as unknown as readonly [Uint8Array, Uint8Array, Uint8Array],
+    recipientId: unbase64(resolved.recipientId),
+    recipientPublicKey: unbase64(resolved.recipientPublicKey),
+    recipientPrivateKey: await importX25519PrivateKey(unbase64(resolved.recipientPrivateKeyPkcs8), false),
+    recoveryPrivateKeysPkcs8: resolved.recoveryPrivateKeysPkcs8.map(unbase64) as unknown as readonly [Uint8Array, Uint8Array, Uint8Array],
   }
 }
 
-function parseDocument(value: unknown): GovernanceDocument {
+function parseDocument(value: unknown): StoredGovernanceDocument {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error('GOVERNANCE_CONFIG_INVALID')
   const record = value as Record<string, unknown>
+  if (record.format === 'chronolog-governance-bootstrap-v2') return parseExternalDocument(record)
   const allowed = new Set([
     'format', 'signedGenesis', 'recipientId', 'recipientPublicKey',
     'recipientPrivateKeyPkcs8', 'recoveryPrivateKeysPkcs8',
@@ -133,6 +152,69 @@ function parseDocument(value: unknown): GovernanceDocument {
     throw new Error('GOVERNANCE_CONFIG_INVALID')
   }
   return record as unknown as GovernanceDocument
+}
+
+function parseExternalDocument(record: Record<string, unknown>): GovernanceDocumentV2 {
+  const allowed = new Set([
+    'format', 'signedGenesis', 'recipientId', 'recipientPublicKey',
+    'recipientPrivateKeyRef', 'recoveryPrivateKeyRefs',
+  ])
+  if (Object.keys(record).some((key) => !allowed.has(key)) ||
+      typeof record.signedGenesis !== 'string' || typeof record.recipientId !== 'string' ||
+      typeof record.recipientPublicKey !== 'string' || typeof record.recipientPrivateKeyRef !== 'string' ||
+      !Array.isArray(record.recoveryPrivateKeyRefs) || record.recoveryPrivateKeyRefs.length !== 3 ||
+      record.recoveryPrivateKeyRefs.some((key: unknown) => typeof key !== 'string')) {
+    throw new Error('GOVERNANCE_CONFIG_INVALID')
+  }
+  validateReference(record.recipientPrivateKeyRef)
+  for (const reference of record.recoveryPrivateKeyRefs as string[]) validateReference(reference)
+  return record as unknown as GovernanceDocumentV2
+}
+
+async function externalizeDocument(
+  document: GovernanceDocument,
+  groupId: Uint8Array,
+  secretStore: DaemonSecretStore,
+): Promise<GovernanceDocumentV2> {
+  const suffix = Buffer.from(groupId).toString('base64url')
+  const recipientPrivateKeyRef = `groups/${suffix}/governance-recipient`
+  const recoveryPrivateKeyRefs = [0, 1, 2].map(
+    (index) => `groups/${suffix}/recovery/${index}`,
+  ) as [string, string, string]
+  await secretStore.set(recipientPrivateKeyRef, document.recipientPrivateKeyPkcs8)
+  for (const [index, reference] of recoveryPrivateKeyRefs.entries()) {
+    await secretStore.set(reference, document.recoveryPrivateKeysPkcs8[index]!)
+  }
+  return {
+    format: 'chronolog-governance-bootstrap-v2',
+    signedGenesis: document.signedGenesis,
+    recipientId: document.recipientId,
+    recipientPublicKey: document.recipientPublicKey,
+    recipientPrivateKeyRef,
+    recoveryPrivateKeyRefs,
+  }
+}
+
+async function resolveDocument(
+  document: StoredGovernanceDocument,
+  secretStore: DaemonSecretStore | undefined,
+): Promise<GovernanceDocument> {
+  if (document.format === 'chronolog-governance-bootstrap-v1') return document
+  if (secretStore === undefined) throw new Error('DAEMON_SECRET_STORE_REQUIRED')
+  return {
+    format: 'chronolog-governance-bootstrap-v1',
+    signedGenesis: document.signedGenesis,
+    recipientId: document.recipientId,
+    recipientPublicKey: document.recipientPublicKey,
+    recipientPrivateKeyPkcs8: await secretStore.get(document.recipientPrivateKeyRef),
+    recoveryPrivateKeysPkcs8: await Promise.all(
+      document.recoveryPrivateKeyRefs.map((reference) => secretStore.get(reference)),
+    ) as [string, string, string],
+  }
+}
+
+function validateReference(reference: string): void {
+  if (!/^[A-Za-z0-9._:/-]{1,256}$/u.test(reference)) throw new Error('GOVERNANCE_SECRET_REFERENCE_INVALID')
 }
 
 async function atomicWrite(path: string, contents: string): Promise<void> {

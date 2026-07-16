@@ -11,8 +11,8 @@
   "include": [
     "apps/**/*.ts",
     "packages/**/*.ts",
-    "examples/**/*.ts"
+    "examples/**/*.ts",
+    "tools/**/*.ts"
   ],
   "exclude": ["**/*.test.ts"]
 }
-

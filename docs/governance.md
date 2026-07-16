@@ -16,8 +16,24 @@ binds those protocol keys to the daemon's authenticated SSB feed.
 The generated recovery keys make local development recoverable, but co-located
 keys do not provide production quorum security. Before a durable deployment,
 export the three recovery private keys to separate offline custodians and
-remove them from the online host. OS-backed key storage and packaged recovery
-ceremonies remain release-hardening gates.
+remove them from the online host.
+
+On Linux, set `CHRONOLOG_SECRET_STORE=secret-service` to keep the daemon
+signing key, epoch content key, governance recipient key, and development
+recovery keys in the host Secret Service through `secret-tool`.
+`CHRONOLOG_SECRET_SERVICE` optionally changes the service namespace. Existing
+inline `config.json` and `governance.json` files are migrated atomically to
+reference-only v2 documents on the first successful start. Secret values are
+sent over stdin and never placed in process arguments.
+
+The host needs `libsecret-tools`, a reachable Secret Service provider, and an
+unlocked collection for the daemon account. Startup fails closed if a v2
+document is opened without that provider or a referenced secret is missing.
+Back up custody before enabling migration; switching the environment back to
+`file` does not copy secrets into JSON. One OS account is still one failure
+domain, so recovery shares must be moved to independent offline custodians
+before a real quorum is claimed. Packaged recovery ceremonies remain a release
+gate.
 
 ## Live operations
 

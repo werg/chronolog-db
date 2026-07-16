@@ -251,7 +251,12 @@ export class ChronologNode {
     await this.#mutex.run(async () => {
       if (this.#seen.has(record.id)) return
       try {
-        if (this.#feedForks.observe(record) === 'quarantined') {
+        const continuity = this.#feedForks.observe(record)
+        if (continuity === 'discarded') {
+          this.#seen.add(record.id)
+          return
+        }
+        if (continuity === 'quarantined') {
           const error = new Error(`FEED_FORK_QUARANTINED:${record.author}`)
           this.#seen.add(record.id)
           this.#recordError(error)

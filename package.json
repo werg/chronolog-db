@@ -32,6 +32,7 @@
     "cli": "tsx apps/chronolog/src/main.ts",
     "custody": "tsx apps/chronologd/src/custody.ts",
     "recovery": "tsx apps/chronolog-recovery/src/main.ts",
+    "snapshot": "tsx apps/chronologd/src/snapshot.ts",
     "demo": "tsx examples/end-to-end.ts",
     "chaos": "tsx packages/chaos/src/cli.ts",
     "chaos:smoke": "tsx packages/chaos/src/cli.ts run smoke",

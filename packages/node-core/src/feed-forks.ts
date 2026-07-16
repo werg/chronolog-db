@@ -23,6 +23,7 @@ export interface FeedForkSnapshot {
     }[]
   }[]
   readonly quarantines: readonly FeedForkEvidence[]
+  readonly discardedRecordIds: readonly string[]
 }
 
 export interface FeedForkPersistence {
@@ -39,14 +40,16 @@ export interface FeedRepairPlan {
 export class FeedForkRegistry {
   readonly #feeds = new Map<string, Map<bigint, { readonly id: string; readonly previous: string | null }>>()
   readonly #quarantines = new Map<string, FeedForkEvidence>()
+  readonly #discardedRecordIds = new Set<string>()
 
   constructor(private readonly persistence?: FeedForkPersistence) {
     const snapshot = persistence?.load()
     if (snapshot !== null && snapshot !== undefined) this.#restore(snapshot)
   }
 
-  observe(record: TransportRecord): 'accepted' | 'duplicate' | 'quarantined' {
+  observe(record: TransportRecord): 'accepted' | 'duplicate' | 'discarded' | 'quarantined' {
     validateRecord(record)
+    if (this.#discardedRecordIds.has(record.id)) return 'discarded'
     if (this.#quarantines.has(record.author)) return 'quarantined'
     const feed = this.#feeds.get(record.author) ??
       new Map<bigint, { readonly id: string; readonly previous: string | null }>()
@@ -103,6 +106,15 @@ export class FeedForkRegistry {
   /** Apply only while the node is stopped; derived stores must then rebuild from this trusted prefix. */
   applyRepair(plan: FeedRepairPlan): void {
     const verified = this.createRepairPlan(plan.feedId, plan.records, plan.trustedHeadId)
+    const quarantine = this.#quarantines.get(verified.feedId)
+    if (quarantine === undefined) throw new Error('FEED_REPAIR_NOT_QUARANTINED')
+    const trustedAtConflict = verified.records.find((record) => record.sequence.toString() === quarantine.sequence)?.id
+    if (trustedAtConflict === undefined ||
+        (trustedAtConflict !== quarantine.acceptedId && trustedAtConflict !== quarantine.conflictingId)) {
+      throw new Error('FEED_REPAIR_CONFLICT_NOT_RESOLVED')
+    }
+    const discarded = trustedAtConflict === quarantine.acceptedId ? quarantine.conflictingId : quarantine.acceptedId
+    this.#discardedRecordIds.add(discarded)
     this.#feeds.set(verified.feedId, new Map(verified.records.map((record) => [
       record.sequence,
       { id: record.id, previous: record.previous ?? null },
@@ -123,6 +135,7 @@ export class FeedForkRegistry {
         }),
       ),
       quarantines: this.quarantineEvidence(),
+      discardedRecordIds: [...this.#discardedRecordIds].sort(),
     }
   }
 
@@ -152,6 +165,10 @@ export class FeedForkRegistry {
       this.#feeds.set(feed.feedId, records)
     }
     for (const quarantine of snapshot.quarantines) this.#quarantines.set(quarantine.feedId, quarantine)
+    for (const id of snapshot.discardedRecordIds ?? []) {
+      if (typeof id !== 'string' || id.length === 0) throw new Error('FEED_FORK_SNAPSHOT_INVALID')
+      this.#discardedRecordIds.add(id)
+    }
   }
 }
 

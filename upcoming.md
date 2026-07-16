@@ -215,6 +215,8 @@ Progress:
 - [x] Self-verifying Linux/macOS native package assembly, OIDC-attested archive
       evidence, and packaged persistent-data replacement drill; cross-version
       evidence waits for the first prior release artifact.
-- [ ] Recorded independent-custodian drill, snapshot-backed
-      repair/import, remote blob fetch, verified traversal, pilot runbooks, and
+- [x] Offline signed snapshot archive export/stage/verify/atomic import and
+      signed-head-bound feed repair with losing-fork discard and state rebuild.
+- [ ] Recorded independent-custodian and snapshot-repair drills, remote blob
+      fetch, verified traversal, pilot runbooks, and
       external assessment.

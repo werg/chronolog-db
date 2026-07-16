@@ -19,6 +19,7 @@ export const DOMAINS = {
   validationPolicy: 'chronolog/validation-policy/v1',
   capabilitySnapshot: 'chronolog/capability-snapshot/v1',
   snapshotManifest: 'chronolog/snapshot-manifest/v1',
+  materializedLog: 'chronolog/materialized-log/v1',
   recovery: 'chronolog/recovery/v1',
   epochManifest: 'chronolog/epoch-manifest/v1',
   epochWrap: 'chronolog/epoch-wrap/v1',

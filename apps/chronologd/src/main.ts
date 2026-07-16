@@ -28,8 +28,10 @@ import { discoverPublicSsbAddress } from './nat-discovery.js'
 import { daemonHealth, prometheusMetrics } from './observability.js'
 import { daemonSecretStoreFromEnvironment } from './secret-store.js'
 import { createGovernanceRpcAdmin } from './governance-admin.js'
+import { acquireDataDirectoryLock } from './data-lock.js'
 
 const dataDirectory = resolve(process.env.CHRONOLOG_DATA_DIR ?? '.chronolog')
+const dataLock = await acquireDataDirectoryLock(dataDirectory, 'daemon')
 const runtime = parseDaemonRuntimeConfig(process.env)
 const secretStore = daemonSecretStoreFromEnvironment(process.env)
 const { config, identity } = await loadOrCreateConfig(dataDirectory, secretStore)
@@ -72,6 +74,7 @@ async function stop(signal: string): Promise<void> {
   await server.close()
   await governance?.close()
   await node.close()
+  await dataLock.release()
 }
 
 function terminate(signal: string): void {

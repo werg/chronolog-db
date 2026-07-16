@@ -55,6 +55,7 @@ import {
   readExecutionManifest,
   readSystemLog,
 } from './system-log.js'
+import { materializedLogDigest } from './snapshot-evidence.js'
 import type {
   AdmittedTransaction,
   DatabaseLike,
@@ -187,6 +188,9 @@ export class DeterministicMaterializer implements MaterializerSqlBackend {
   get executionManifest(): ExecutionManifest { return structuredClone(this.#executionManifest) }
   get backend(): MaterializerBackendInfo { return structuredClone(this.#backend) }
   get checkpointError(): string | null { return this.#checkpointError }
+  get databaseContentHash(): string { return this.#published.contentHash }
+
+  transactionLogDigest(): Promise<Uint8Array> { return materializedLogDigest(this.#log) }
 
   checkpoints(): readonly MaterializerCheckpointInfo[] {
     return this.#checkpoints.map((checkpoint) => structuredClone(checkpoint))

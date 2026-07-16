@@ -120,9 +120,11 @@ non-writable, and appears in status/metrics. The repair primitive accepts only
 a complete prefix ending at an explicitly trusted head, but operators must not
 apply it until the trusted snapshot/full derived-state rebuild workflow lands.
 
-Signed snapshot manifests and content-addressed blob stores now provide exact
-trust/anti-rollback and chunk-integrity boundaries. Snapshot archive staging
-and cross-node blob fetching remain disabled release gates.
+Signed snapshot manifests and the offline snapshot CLI now provide exact
+archive hashing, signer/group/manifest/rollback checks, independent staged
+Dolt/log validation, atomic database replacement with backup, derived-state
+rebuild, and signed-head-bound fork repair. Content-addressed blob stores
+provide local chunk integrity; cross-node fetching remains disabled.
 
 ## Outstanding release gates
 
@@ -132,8 +134,8 @@ and cross-node blob fetching remain disabled release gates.
 - macOS/Windows OS key providers and hardware-backed custody policy (Linux
   Secret Service migration and independent recovery export/sign/purge tooling
   are implemented; the pilot ceremony remains required);
-- feed-fork quarantine/repair, trusted snapshot import/export, and large-payload
-  blob manifests;
+- production drill evidence for trusted snapshot import/fork repair and the
+  still-disabled cross-node large-payload fetch path;
 - NAT discovery, sizing envelopes, alertable observability, and runbooks;
 - resolution or explicit acceptance of every finding in the
   [internal threat review](security-threat-review.md);

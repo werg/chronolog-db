@@ -36,6 +36,7 @@ describe('feed fork quarantine and repair', () => {
     const trusted = [record(1n, 'first'), record(2n, 'right', 'first')]
     registry.applyRepair(registry.createRepairPlan('@writer.ed25519', trusted, 'right'))
     expect(registry.quarantined()).toBe(false)
+    expect(registry.observe(record(2n, 'left', 'first'))).toBe('discarded')
     expect(registry.observe(record(3n, 'third', 'right'))).toBe('accepted')
   })
 })

@@ -33,7 +33,7 @@ The principal boundaries are:
 | --- | --- | --- |
 | Non-canonical, oversized, or ambiguous protocol input | Strict bounded canonical CBOR; fixed-seed mutation fuzzing; versioned codecs | Coverage-guided native fuzzing remains scheduled release work |
 | Feed impersonation or copied signed payload | SSB authentication plus capability-revision binding of inner signer to exact outer feed | A feed-key compromise remains equivalent to that transport identity |
-| Feed equivocation | Author/sequence/previous continuity registry; persistent quarantine; node becomes non-writable and degraded | Repair requires an offline trusted prefix and full derived-state rebuild |
+| Feed equivocation | Author/sequence/previous continuity registry; persistent quarantine; node becomes non-writable and degraded; signed-head snapshot repair accepts only a complete prefix and discards the recorded losing identity during rebuild | Operator signer/head selection and the repair ceremony require pilot evidence |
 | Unauthorized SQL or protected-state access | Whole-program compiler gates plus a native authorizer backstop; compiler and authorizer adversarial tests | Exact parser grammar remains one SQLite release behind and is measured by differential corpus |
 | Ambient time/random/filesystem or transaction control | Closed function/pragma/module registries and explicit prohibited statement classes | Newly enabled native functions require a manifest identity and conformance evidence |
 | Row, representative, peer, or conflict nondeterminism | Structural row-choice proofs, canonical result ordering, bounded ordered mutation identities, replay corpus | Broader catalog-dependent proofs remain gated |
@@ -42,7 +42,7 @@ The principal boundaries are:
 | Capability or epoch rollback | Signed revision chain, exact previous digest, scoped readers, epoch chain, threshold recovery records, verified share export/purge, offline signing and threshold verification | A production quorum exists only after a recorded independent-custodian ceremony and drill |
 | Plaintext daemon private keys | Reference-only v2 config/governance documents and Linux Secret Service migration | Other OS/hardware providers and independent recovery custody remain open |
 | Blob substitution or truncation | Per-chunk and total domain-separated digests, bounded resolution, content-addressed stores | No production cross-node chunk fetch protocol; blob mode is not active by default |
-| Snapshot rollback or foreign-state import | Authorized signature, group/manifest match, minimum revision, exact DB/log/feed-head identities | Archive export/import and atomic replacement workflow remain open |
+| Snapshot rollback or foreign-state import | Fixed archive paths and hashes, authorized signature, group/manifest/no-rollback checks, staged production-adapter DB/log verification, fsynced atomic replacement and retained backup | Pilot restore/repair drill and platform filesystem qualification remain required |
 | RPC credential disclosure or unauthenticated remote bind | Remote bind requires bearer token; timing-safe comparison; metrics share authentication | Bearer tokens need deployment TLS/secret rotation outside this process |
 | Dependency/build substitution | Pinned lockfile, native source checksum/patches, clean-worktree native archives, per-file verification, SBOM, subject hashes, package replacement drill, OIDC provenance attestations | A prior-release-to-candidate drill and publication ceremony require an actual earlier release |
 
@@ -56,12 +56,15 @@ The principal boundaries are:
 - `SEC-002` — Blob manifests have exact local storage and wire verification but
   no authenticated inter-node fetch/retention protocol. Feature disabled by
   default; it must not appear in an active manifest.
-- `SEC-003` — Snapshot manifests are signed and anti-rollback checked, but
-  archive creation, import staging, and atomic store replacement are absent.
-  Snapshot import is not an operator capability yet.
-- `SEC-004` — Feed repair validation exists, but applying a repaired prefix
-  safely requires the missing trusted snapshot/state rebuild. Quarantined nodes
-  halt writing instead of attempting an unsafe online repair.
+- `SEC-003` — Snapshot export/import now hashes fixed archive paths, validates a
+  staged database against signed logical evidence, retains the old database,
+  atomically replaces the materializer, and forces derived-state rebuild.
+  Release evidence still needs a packaged pilot restore on each supported
+  filesystem.
+- `SEC-004` — Feed repair is now an offline signed-snapshot operation: the
+  complete prefix must end at the signed head and resolve the recorded fork,
+  while the losing identity is persistently discarded during replay. A pilot
+  must execute and independently review the forensic repair ceremony.
 - `SEC-005` — NAT discovery trusts an explicitly configured HTTPS service and
   validates one SSB multiserver address. It does not create a port mapping or
   prove reachability; operator/firewall verification remains required.

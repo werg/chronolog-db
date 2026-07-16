@@ -35,6 +35,7 @@ try {
     launcher('chronolog', 'chronolog-cli/src/main.ts'),
     launcher('chronolog-custody', 'chronologd/src/custody.ts'),
     launcher('chronolog-recovery', 'chronolog-recovery-cli/src/main.ts'),
+    launcher('chronolog-snapshot', 'chronologd/src/snapshot.ts'),
   ])
   await writeFile(join(staging, 'verify-distribution.mjs'), await readFile(join(root, 'tools', 'verify-distribution.mjs')), { mode: 0o755 })
   await writeFile(join(staging, 'bin', 'chronolog-verify'), '#!/bin/sh\nset -eu\nROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)\nexec node "$ROOT/verify-distribution.mjs"\n', { mode: 0o755 })

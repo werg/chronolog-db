@@ -39,7 +39,7 @@ The principal boundaries are:
 | Row, representative, peer, or conflict nondeterminism | Structural row-choice proofs, canonical result ordering, bounded ordered mutation identities, replay corpus | Broader catalog-dependent proofs remain gated |
 | Partial candidate publication or crash | Private replay branch, independent reader verification, atomic head move, five-point `SIGKILL` matrix | Filesystem/hardware failure behavior still depends on the supported storage stack |
 | Replay result substitution | Protected result bytes and domain-separated digest verified on reopen | Stored-data format migration is intentionally absent in the prototype |
-| Capability or epoch rollback | Signed revision chain, exact previous digest, scoped readers, epoch chain, threshold recovery records | Recovery shares co-located under one account do not form a production quorum |
+| Capability or epoch rollback | Signed revision chain, exact previous digest, scoped readers, epoch chain, threshold recovery records, verified share export/purge, offline signing and threshold verification | A production quorum exists only after a recorded independent-custodian ceremony and drill |
 | Plaintext daemon private keys | Reference-only v2 config/governance documents and Linux Secret Service migration | Other OS/hardware providers and independent recovery custody remain open |
 | Blob substitution or truncation | Per-chunk and total domain-separated digests, bounded resolution, content-addressed stores | No production cross-node chunk fetch protocol; blob mode is not active by default |
 | Snapshot rollback or foreign-state import | Authorized signature, group/manifest match, minimum revision, exact DB/log/feed-head identities | Archive export/import and atomic replacement workflow remain open |
@@ -48,9 +48,11 @@ The principal boundaries are:
 
 ## Findings and disposition
 
-- `SEC-001` — Recovery keys generated for development remain co-located even
-  when placed in one Secret Service collection. Release blocker: separate
-  shares among independent custodians and test the ceremony.
+- `SEC-001` — The daemon can now verify/export each genesis recovery share,
+  remove all online references after explicit confirmation, and run canonical
+  prepare/sign/combine/verify steps offline. Release blocker remains procedural:
+  three independent custodians must complete the handoff and a two-person drill
+  on the exact release candidate; a local test cannot establish human custody.
 - `SEC-002` — Blob manifests have exact local storage and wire verification but
   no authenticated inter-node fetch/retention protocol. Feature disabled by
   default; it must not appear in an active manifest.

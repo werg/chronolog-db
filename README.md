@@ -177,6 +177,12 @@ Linux hosts can set `CHRONOLOG_SECRET_STORE=secret-service` (and optionally
 from JSON into an unlocked Secret Service collection. Startup then requires
 that provider and fails closed on a missing reference.
 
+`pnpm custody export|purge` moves the three development recovery shares out of
+the daemon's secret namespace after a verified handoff, while `pnpm recovery`
+provides network-independent canonical payload inspection, isolated signing,
+threshold combination, and verification. The detailed ceremony and its
+mandatory independent-custodian drill are in the governance guide.
+
 `CHRONOLOG_STATIC_MEMBERSHIP_FILE` remains an explicit legacy/testing override.
 It points every daemon at the same out-of-band JSON snapshot, whose group,
 membership revision, and validation policy must match the corresponding values

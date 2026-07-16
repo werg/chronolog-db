@@ -79,7 +79,10 @@ Linux pilot hosts can set `CHRONOLOG_SECRET_STORE=secret-service` to migrate
 daemon identity, epoch, recipient, and bootstrap-recovery private material out
 of JSON and into the host Secret Service. See the governance guide for host
 requirements, migration behavior, and the remaining requirement to separate
-recovery shares across custodians.
+recovery shares across custodians. The verified export/purge workflow and
+network-independent signer prove key/genesis matching and absence from the
+daemon store; release evidence must additionally record a real handoff to
+three independent custodians and a two-custodian drill.
 
 ## Network and observability
 
@@ -109,7 +112,8 @@ and cross-node blob fetching remain disabled release gates.
 - signed, platform-specific installation artifacts and verified upgrade paths
   (SBOM, provenance generation, and CI attestations are implemented);
 - macOS/Windows OS key providers and hardware-backed custody policy (Linux
-  Secret Service migration is implemented);
+  Secret Service migration and independent recovery export/sign/purge tooling
+  are implemented; the pilot ceremony remains required);
 - feed-fork quarantine/repair, trusted snapshot import/export, and large-payload
   blob manifests;
 - NAT discovery, sizing envelopes, alertable observability, and runbooks;

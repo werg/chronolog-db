@@ -28,6 +28,8 @@
     "conformance:sqlite": "tsx packages/conformance/src/sqlite-differential.ts",
     "dev": "tsx apps/chronologd/src/main.ts",
     "cli": "tsx apps/chronolog/src/main.ts",
+    "custody": "tsx apps/chronologd/src/custody.ts",
+    "recovery": "tsx apps/chronolog-recovery/src/main.ts",
     "demo": "tsx examples/end-to-end.ts",
     "chaos": "tsx packages/chaos/src/cli.ts",
     "chaos:smoke": "tsx packages/chaos/src/cli.ts run smoke",

@@ -31,9 +31,47 @@ unlocked collection for the daemon account. Startup fails closed if a v2
 document is opened without that provider or a referenced secret is missing.
 Back up custody before enabling migration; switching the environment back to
 `file` does not copy secrets into JSON. One OS account is still one failure
-domain, so recovery shares must be moved to independent offline custodians
-before a real quorum is claimed. Packaged recovery ceremonies remain a release
-gate.
+domain. The custody tool performs an explicit two-step handoff:
+
+```sh
+CHRONOLOG_SECRET_STORE=secret-service pnpm custody export /media/handoff
+# Give exactly one recovery-share-N file to each independent custodian.
+# Each custodian verifies and stores their share on their offline device.
+CHRONOLOG_SECRET_STORE=secret-service pnpm custody purge /media/handoff \
+  --confirm-external-custody
+```
+
+Export verifies all three private shares against the immutable genesis public
+keys and writes mode-`0600` files plus a public custody manifest. Purge verifies
+those files again, requires the literal confirmation flag, changes
+`governance.json` to v3 `recoveryCustody: external`, and removes the online
+Secret Service references. The daemon then starts without loading any recovery
+private key. Purge does not delete the handoff files: deleting or sanitizing the
+transfer medium is an operator action after the three independent copies have
+been tested. Do not treat three files on one medium, three secrets under one OS
+account, or three shares held by one person as a quorum.
+
+Recovery signing itself is network-independent:
+
+```sh
+pnpm recovery prepare @recovery-spec.json > payload.base64url
+pnpm recovery inspect @payload.base64url
+# Run separately on two isolated custodian devices:
+pnpm recovery sign @payload.base64url 0 @recovery-share-0.pkcs8.base64 > share-0.signed
+pnpm recovery sign @payload.base64url 2 @recovery-share-2.pkcs8.base64 > share-2.signed
+# Combine and verify where only public custody data is needed:
+pnpm recovery combine @payload.base64url @share-0.signed @share-2.signed > recovery-record.base64url
+pnpm recovery verify @recovery-record.base64url @recovery-custody.json
+pnpm cli governance recover @recovery-record.base64url
+```
+
+The prepare specification pins the current `groupId`, governance revision and
+revision digest from `chronolog governance status`, the replacement root/feed,
+the complete replacement validator grants and timestamp floors, and whether
+the action explicitly reopens history. Custodians should inspect the decoded
+payload, compare it over an independent channel, and never expose their PKCS#8
+share to the online daemon. A pilot must still execute and record the actual
+three-person handoff and two-person recovery drill before release.
 
 ## Live operations
 

@@ -95,6 +95,15 @@ importers:
         specifier: workspace:*
         version: link:../../packages/rpc
 
+  apps/chronolog-recovery:
+    dependencies:
+      '@chronolog/capabilities':
+        specifier: workspace:*
+        version: link:../../packages/capabilities
+      '@chronolog/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
+
   apps/chronologd:
     dependencies:
       '@chronolog/capabilities':

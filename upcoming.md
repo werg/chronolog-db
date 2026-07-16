@@ -210,6 +210,8 @@ Progress:
       findings recorded.
 - [x] Authenticated governance status/grant/revoke/epoch/history/recovery RPC
       and CLI workflows that keep content keys inside the daemon.
-- [ ] Installable packaging/upgrades, independent key custody, snapshot-backed
+- [x] Verified recovery-share export/purge plus network-independent canonical
+      prepare/inspect/sign/combine/verify tooling; pilot custodian drill pending.
+- [ ] Installable packaging/upgrades, recorded independent-custodian drill, snapshot-backed
       repair/import, remote blob fetch, verified traversal, pilot runbooks, and
       external assessment.

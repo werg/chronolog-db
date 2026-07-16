@@ -5,7 +5,11 @@ import { join } from 'node:path'
 import { generateEd25519KeyPair } from '@chronolog/protocol'
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { loadOrCreateGovernanceBootstrap } from './governance-config.js'
+import {
+  exportRecoveryCustody,
+  loadOrCreateGovernanceBootstrap,
+  purgeExportedRecoveryCustody,
+} from './governance-config.js'
 import { MemoryDaemonSecretStore } from './secret-store.js'
 
 const directories: string[] = []
@@ -30,7 +34,7 @@ describe('daemon governance bootstrap', () => {
     expect(second.genesis).toEqual(first.genesis)
     expect(second.validationPolicyId).toEqual(first.validationPolicyId)
     expect(second.recipientId).toEqual(identity.publicKeyBytes)
-    expect(second.recoveryPrivateKeysPkcs8.every((key) => key.length > 0)).toBe(true)
+    expect(second.recoveryPrivateKeysPkcs8!.every((key) => key.length > 0)).toBe(true)
   })
 
   it('keeps recipient and recovery private keys out of the governance document', async () => {
@@ -57,6 +61,42 @@ describe('daemon governance bootstrap', () => {
     const { secretStore: _secretStore, ...withoutSecretStore } = options
     await expect(loadOrCreateGovernanceBootstrap(withoutSecretStore))
       .rejects.toThrow('DAEMON_SECRET_STORE_REQUIRED')
+  })
+
+  it('exports verified shares and removes their online references only after confirmation', async () => {
+    const dataDirectory = await mkdtemp(join(tmpdir(), 'chronolog-governance-custody-'))
+    directories.push(dataDirectory)
+    const custodyDirectory = join(dataDirectory, 'offline-handoff')
+    const secretStore = new MemoryDaemonSecretStore()
+    const options = {
+      dataDirectory,
+      groupId: bytes32(21),
+      schemaId: bytes32(22),
+      identity: await generateEd25519KeyPair(),
+      transportAuthor: '@root.ed25519',
+      secretStore,
+      now: () => 100,
+    }
+    const bootstrap = await loadOrCreateGovernanceBootstrap(options)
+    const manifest = await exportRecoveryCustody({ dataDirectory, outputDirectory: custodyDirectory, secretStore })
+    expect(manifest.recoveryThreshold).toBe('2')
+    expect((await stat(join(custodyDirectory, 'recovery-share-0.pkcs8.base64'))).mode & 0o777).toBe(0o600)
+    await expect(purgeExportedRecoveryCustody({
+      dataDirectory, custodyDirectory, secretStore, confirmExternalCustody: false,
+    })).rejects.toThrow('RECOVERY_CUSTODY_CONFIRMATION_REQUIRED')
+    await purgeExportedRecoveryCustody({
+      dataDirectory, custodyDirectory, secretStore, confirmExternalCustody: true,
+    })
+    const document = JSON.parse(await readFile(join(dataDirectory, 'governance.json'), 'utf8')) as Record<string, unknown>
+    expect(document).toMatchObject({ format: 'chronolog-governance-bootstrap-v3', recoveryCustody: 'external' })
+    expect(document).not.toHaveProperty('recoveryPrivateKeyRefs')
+    const reloaded = await loadOrCreateGovernanceBootstrap(options)
+    expect(reloaded.genesis).toEqual(bootstrap.genesis)
+    expect(reloaded.recoveryPrivateKeysPkcs8).toBeUndefined()
+    for (let index = 0; index < 3; index += 1) {
+      await expect(secretStore.get(`groups/${Buffer.from(options.groupId).toString('base64url')}/recovery/${index}`))
+        .rejects.toThrow('DAEMON_SECRET_NOT_FOUND')
+    }
   })
 })
 

@@ -1,5 +1,8 @@
 # Reducer and DoltLite Materializer Implementation
 
+Status: historical relational-IR reducer plan; retained for replay and
+atomicity background
+
 ## 1. Responsibility
 
 The materializer derives one published database revision from the admitted,

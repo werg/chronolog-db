@@ -1,5 +1,9 @@
 # Conformance, Testing, and Delivery Implementation
 
+Status: historical relational-IR delivery plan; its general conformance
+methods remain roadmap input, while Specifications 10/11 and the compatibility
+ledger define the active feature contract
+
 ## 1. Responsibility
 
 This specification turns deterministic behavior into executable release gates
@@ -410,4 +414,3 @@ The implementation plan is complete when:
 8. Supported platforms produce the expected portable semantic digests.
 9. Fuzz/sanitizer work has no unresolved release-blocking findings.
 10. The active manifest advertises no unimplemented or unproven feature.
-

@@ -36,3 +36,48 @@ jobs:
           path: coverage/coverage-summary.json
           if-no-files-found: warn
           retention-days: 14
+
+  conformance:
+    name: Conformance (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm conformance
+      - name: Preserve conformance report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: conformance-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/conformance/report.json
+          if-no-files-found: error
+          retention-days: 30
+
+  compare-conformance:
+    name: Compare portable conformance digests
+    needs: conformance
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: conformance-*-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/conformance-platforms
+      - run: pnpm conformance:compare artifacts/conformance-platforms

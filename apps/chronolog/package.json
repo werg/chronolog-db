@@ -6,6 +6,7 @@
   "dependencies": {
     "@chronolog/client": "workspace:*",
     "@chronolog/ir": "workspace:*",
+    "@chronolog/migrations": "workspace:*",
     "@chronolog/rpc": "workspace:*"
   }
 }

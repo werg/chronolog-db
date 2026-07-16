@@ -1,5 +1,8 @@
 # Direct Prototype Cutover
 
+Status: historical relational-IR cutover plan; superseded by Specifications 10
+and 11 for the SQL-first prototype
+
 ## 1. Purpose
 
 This document translates the no-compatibility rule into concrete repository
@@ -253,4 +256,3 @@ The direct cutover is complete when:
    step.
 9. All local-query SQL paths are explicitly read-only and separately named.
 10. The deletion checklist passes in CI.
-

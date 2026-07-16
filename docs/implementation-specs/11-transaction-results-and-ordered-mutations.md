@@ -3,12 +3,14 @@
 Status: normative supplement to
 `10-deterministic-sql-transactions.md` for the unreleased SQL-first prototype
 
-Implementation status: the result-envelope, multiset `RETURNING`, protected-
-storage, retrieval-RPC, and raw-client foundations exist. The normative
-tightening and conformance work in this document—especially aggregate result
-limits, attribution identities, envelope/program verification, and the ordered
-target-key subset—remains required before the corresponding compatibility-
-ledger entries may be enabled.
+Implementation status: the initial version-1 scope is implemented end to end.
+This includes canonical result/envelope codecs and digests, aggregate semantic
+limits, multiset `RETURNING`, protected atomic storage, stable rejection
+attribution and schema identities, envelope/program verification on append and
+reopen, revision-aware RPC/client retrieval, and the conservative ordered
+target-key subset. The compatibility ledger records the enabled boundary.
+Broader conflicts, triggers, modules, and order-sensitive mutation forms remain
+gated until they earn the additional proofs and fixtures required here.
 
 This specification defines the protocol and execution work required to expose
 results from replicated SQL body statements, including SQLite `RETURNING`, and

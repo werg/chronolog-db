@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chronolog.invalid/schema/conformance-report-v1.schema.json",
+  "title": "Chronolog conformance report v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "deterministic", "operational"],
+  "properties": {
+    "format": { "const": "chronolog-conformance-report-v1" },
+    "deterministic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "executionManifestDigest", "fixtureCorpusDigest",
+        "compatibilityLedgerDigest", "enabledFeatures", "featureEvidence",
+        "testGroups", "replayDigest", "portableSemanticDigest"
+      ],
+      "properties": {
+        "executionManifestDigest": { "$ref": "#/$defs/digest" },
+        "fixtureCorpusDigest": { "$ref": "#/$defs/digest" },
+        "compatibilityLedgerDigest": { "$ref": "#/$defs/digest" },
+        "enabledFeatures": { "type": "array", "items": { "type": "string" } },
+        "featureEvidence": {
+          "type": "object",
+          "additionalProperties": { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+        },
+        "testGroups": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "passed", "evidenceDigest"],
+            "properties": {
+              "id": { "type": "string" },
+              "passed": { "const": true },
+              "evidenceDigest": { "$ref": "#/$defs/digest" }
+            }
+          }
+        },
+        "replayDigest": { "$ref": "#/$defs/digest" },
+        "portableSemanticDigest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "operational": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceCommit", "platform", "generatedAt"],
+      "properties": {
+        "sourceCommit": { "type": "string" },
+        "platform": { "type": "string" },
+        "generatedAt": { "type": "string", "format": "date-time" }
+      }
+    }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  }
+}

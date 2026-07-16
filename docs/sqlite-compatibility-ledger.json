@@ -1,7 +1,7 @@
 {
   "ledgerVersion": 2,
   "normativePolicy": "docs/implementation-specs/10-deterministic-sql-transactions.md#82-semantic-compatibility-ledger",
-  "auditedAt": "2026-07-15",
+  "auditedAt": "2026-07-16",
   "implementationSources": {
     "compiler": "packages/compiler-sqlite/src/sql-compiler.ts",
     "functionRegistry": "packages/compiler-sqlite/src/deterministic-functions.ts",
@@ -13,8 +13,14 @@
     "parser": "sqlite3-parser@0.7.1 using its SQLite 3.53.0 grammar export",
     "enginePackage": "@dolthub/doltlite@0.11.29",
     "runtimeSQLiteVersion": "3.54.0",
-    "parserRuntimeStatus": "temporarily_gated",
-    "parserRuntimeReason": "Unknown SQLite 3.54-only syntax fails closed until an exact 3.54 grammar and differential corpus are available."
+    "parserRuntimeStatus": "measured_compatibility_boundary",
+    "parserRuntimeReason": "The compiler grammar is one release behind the runtime. A checked-in fail-closed differential corpus covers every classified statement, query/expression, and function family, malformed input, parameter/result behavior, and runtime-newer generic function syntax.",
+    "parserRuntimeEvidence": {
+      "command": "pnpm conformance:sqlite",
+      "corpus": "packages/conformance/fixtures/sqlite-differential.json",
+      "runner": "packages/conformance/src/sqlite-differential.ts",
+      "classifiedFamilies": 57
+    }
   },
   "statuses": [
     "portable",
@@ -139,7 +145,7 @@
     "rejectionAttribution": "phase, precondition id/index, statement index, manifest-registered stable code, and nullable canonical SQL schema identities are persisted; rejected candidates have no result envelope."
   },
   "knownTemporaryDebt": [
-    "Exact SQLite 3.54 parser grammar and parser/runtime differential corpus",
+    "Exact SQLite 3.54 parser grammar remains unavailable; the pinned 3.53/3.54 compatibility boundary is measured by pnpm conformance:sqlite",
     "Canonical REAL input binding profile",
     "Scalar-subquery and nested LIMIT row-choice completion",
     "DISTINCT/GROUP BY/min/max representative canonicalization",

@@ -28,6 +28,9 @@ importers:
       '@chronolog/materializer-doltlite':
         specifier: workspace:*
         version: link:packages/materializer-doltlite
+      '@chronolog/migrations':
+        specifier: workspace:*
+        version: link:packages/migrations
       '@chronolog/node-core':
         specifier: workspace:*
         version: link:packages/node-core
@@ -85,6 +88,9 @@ importers:
       '@chronolog/ir':
         specifier: workspace:*
         version: link:../../packages/ir
+      '@chronolog/migrations':
+        specifier: workspace:*
+        version: link:../../packages/migrations
       '@chronolog/rpc':
         specifier: workspace:*
         version: link:../../packages/rpc
@@ -181,6 +187,21 @@ importers:
         specifier: 0.7.1
         version: 0.7.1
 
+  packages/conformance:
+    dependencies:
+      '@chronolog/compiler-sqlite':
+        specifier: workspace:*
+        version: link:../compiler-sqlite
+      '@chronolog/materializer-doltlite':
+        specifier: workspace:*
+        version: link:../materializer-doltlite
+      '@chronolog/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      '@dolthub/doltlite':
+        specifier: 0.11.29
+        version: 0.11.29(patch_hash=b8b12ba33968f3e1d16602d663535fa7db735a63d12677d1d7352e8a755a94e9)
+
   packages/control-store:
     dependencies:
       '@chronolog/capabilities':
@@ -236,6 +257,12 @@ importers:
       '@dolthub/doltlite':
         specifier: 0.11.29
         version: 0.11.29(patch_hash=b8b12ba33968f3e1d16602d663535fa7db735a63d12677d1d7352e8a755a94e9)
+
+  packages/migrations:
+    dependencies:
+      '@chronolog/client':
+        specifier: workspace:*
+        version: link:../client
 
   packages/node-core:
     dependencies:

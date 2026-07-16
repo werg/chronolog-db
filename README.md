@@ -33,7 +33,8 @@ current deterministic transaction architecture is specified in
 and the rest of the
 [implementation specification suite](docs/implementation-specs/README.md).
 The exact working/gated feature boundary is tracked in
-[implementation status](docs/implementation-status.md). Container fault and
+[implementation status](docs/implementation-status.md), and the ordered work
+queue is maintained in [upcoming work](upcoming.md). Container fault and
 load testing is documented in the [chaos testing guide](docs/chaos-testing.md).
 
 This is a direct implementation with no legacy transaction decoder, schema
@@ -78,6 +79,10 @@ pnpm cli query 'SELECT * FROM accounts WHERE id = ?' '[{"$int64":"1"}]'
 pnpm cli transact @transaction.json
 pnpm cli outcome TRANSACTION_ID
 pnpm cli result TRANSACTION_ID
+pnpm cli migrations status @migration.json
+pnpm cli migrations apply @migration.json --watermark
+pnpm cli catalog inspect
+pnpm cli catalog bindings > generated-catalog.ts
 ```
 
 `query` executes a local read-only SQL statement with an optional JSON array of
@@ -100,6 +105,15 @@ Set `CHRONOLOG_URL`, `CHRONOLOG_GROUP_ID`, and `CHRONOLOG_TOKEN` when connecting
 to a non-default daemon. The daemon refuses to bind RPC to a non-loopback host
 unless a non-empty `CHRONOLOG_TOKEN` is configured. Transaction specifications can be read from a file by
 prefixing its path with `@`.
+
+Application migrations are ordinary atomic SQL transactions recorded in
+`application_migrations`; there is no privileged schema transaction or
+authoritative schema manifest. Migration files contain `component`, `id`,
+positive `version`, and `statements`; the CLI derives and verifies a checksum
+over that exact bundle. `migrations wait` reports accepted, rejected,
+watermark-excluded, or timeout settlement explicitly. See the
+[migration package guide](packages/migrations/README.md) for signed schema
+assumptions, revision-pinned catalog diffs, and advisory TypeScript generation.
 
 ## Container chaos testing
 
@@ -196,6 +210,7 @@ static snapshots and epoch configuration to all participants and restart them.
 | `canonical` | Strict bounded CBOR, UTF-8, bytes, typed hash domains |
 | `ir` | Canonical logical-value and execution-manifest codecs |
 | `compiler-sqlite` | Deterministic SQL parsing, validation, and engine manifests |
+| `conformance` | Versioned SQLite differential corpus, native replay evidence, and portable platform reports |
 | `protocol` | Signed transaction/attestation messages and immutable order keys |
 | `capabilities` | Genesis, grants, revocations, policies, recovery |
 | `crypto` | HPKE, signed epochs, content encryption, key-store interfaces |
@@ -203,6 +218,7 @@ static snapshots and epoch configuration to all participants and restart them.
 | `control-store` | Rebuildable candidates, attestations, order, heartbeats, evidence |
 | `materializer` | Portable exact-ref contracts, coordinator/query/publication interfaces, and differential fixtures |
 | `materializer-doltlite` | Profiled SQL execution, exact result/log storage, Dolt checkpoints, and suffix replay |
+| `migrations` | Checksummed application migrations, signed schema assumptions, catalog snapshots/diffs, and advisory bindings |
 | `runtime-workerd` | Named immutable-input controller, deterministic run/follow coordinator, differential adapter, and test-only real DoltLite replay fixture |
 | `node-core` | Ingestion, validation, admission, encryption, orchestration |
 | `rpc` | Local service contract, in-process and HTTP transports |

@@ -1,7 +1,8 @@
 # Implementation Status
 
-Chronolog is an unreleased prototype with one signed SQL transaction format,
-one consensus execution path, and no compatibility decoder or migration path.
+Chronolog is an unreleased prototype with one signed SQL transaction format
+and one consensus execution path. It has application-facing SQL migration
+tooling, but no stored-data compatibility decoder or protocol migration path.
 The exact working and gated SQLite boundary is machine-readable in the
 [compatibility ledger](sqlite-compatibility-ledger.json).
 
@@ -14,8 +15,8 @@ Implemented and covered by executable tests:
 - canonical scalar, ordered, multiset, and set results, plus versioned accepted
   transaction result envelopes and domain-separated digests;
 - a SQLite 3.53 grammar parser pinned through `sqlite3-parser@0.7.1`, with the
-  runtime pinned to the SQLite 3.54 DoltLite build and unknown syntax failing
-  closed;
+  runtime pinned to the SQLite 3.54 DoltLite build, unknown syntax failing
+  closed, and a differential corpus covering all 57 classified SQL families;
 - semantic compilation of one statement at a time, exact SQLite parameter
   numbering, protected-object/effect analysis, deterministic function gates,
   ordering checks, stable diagnostics, and whole-program validation;
@@ -36,6 +37,9 @@ Implemented and covered by executable tests:
 - TypeScript `query`, `observe`, `expect`, `assert`, and `exec` APIs accepting
   conventional `{ sql, parameters }` statements, with exact result-download
   verification and draft/statement provenance checks;
+- checksummed application migration history, exact/minimum signed schema
+  assumptions, revision-pinned catalog inspection/diffing, advisory TypeScript
+  bindings, migration/schema live resources, and CLI status/apply/wait flows;
 - SQL-first daemon, CLI, React hooks, examples, and chaos workloads; and
 - canonical CBOR, signatures, capability/recovery primitives, encryption,
   durable allow-listed SSB replication, deterministic ordering, validator
@@ -59,7 +63,8 @@ node before publication and again under the same profile during replay.
 The following valid SQLite surfaces remain explicitly gated pending the named
 determinism/conformance work:
 
-- SQLite 3.54-only parser coverage and parser/runtime differential fixtures;
+- an exact SQLite 3.54 parser grammar (the current measured 3.53/3.54 boundary
+  is executable through `pnpm conformance:sqlite`);
 - consensus REAL input bindings;
 - scalar subqueries, nested or unordered `LIMIT`, and other unresolved row
   choices;
@@ -87,8 +92,10 @@ rotation remain operational work.
 
 ## Release gates outside this prototype
 
-- exact SQLite 3.54 parser synchronization and a larger differential corpus;
-- cross-platform native replay CI and deterministic resource characterization;
+- exact SQLite 3.54 parser synchronization, or continued executable proof of
+  the measured 3.53/3.54 compatibility boundary;
+- validation of the configured Linux/macOS portable replay digest comparison,
+  plus deterministic resource characterization on release hardware;
 - crash injection at all publication lifecycle boundaries;
 - fuzzing, native sanitizers, signed distributions, OS-backed keystores, and
   external security review; and
@@ -98,3 +105,11 @@ The broader delivery criteria remain in the
 [conformance specification](implementation-specs/09-conformance-delivery.md),
 [deterministic SQL specification](implementation-specs/10-deterministic-sql-transactions.md),
 and [transaction result specification](implementation-specs/11-transaction-results-and-ordered-mutations.md).
+
+## Active roadmap
+
+The ordered implementation queue and acceptance criteria live in
+[`upcoming.md`](../upcoming.md). The next release-confidence tranche is
+machine-readable conformance reports and cross-platform replay CI. Historical
+relational-IR plans are kept for design context but are not the active
+transaction roadmap.

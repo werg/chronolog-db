@@ -1,5 +1,8 @@
 # Deterministic Kernel Implementation
 
+Status: historical relational-IR work package; kernel requirements apply only
+when enabled by the active SQL execution profile and compatibility ledger
+
 ## 1. Responsibility
 
 Deterministic kernels implement logical operations that cannot safely inherit
@@ -364,4 +367,3 @@ Required kernel tests:
 - Kernel semantic failures and host operational failures are distinguishable.
 - Every kernel and dependency affecting semantics contributes to the execution
   manifest digest.
-

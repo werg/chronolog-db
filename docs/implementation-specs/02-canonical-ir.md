@@ -1,5 +1,8 @@
 # Canonical Values and Relational IR Implementation
 
+Status: historical relational-IR design; not the active signed transaction
+contract
+
 ## 1. Responsibility
 
 This specification defines the implementation of the signed relational

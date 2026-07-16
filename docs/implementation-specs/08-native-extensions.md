@@ -1,5 +1,8 @@
 # FTS5, sqlite-vec, Spatial, and Deterministic WASM Implementation
 
+Status: historical extension design and future gate reference; no feature is
+enabled except as recorded by the active compatibility ledger
+
 ## 1. Responsibility
 
 This specification defines registered features that cross SQLite module,
@@ -384,4 +387,3 @@ In addition to each feature gate, native tests cover:
 - WASM has no ambient imports and uses deterministic runtime controls.
 - Any unsupported or mismatched feature fails before attestation/materialization
   rather than falling back silently.
-

@@ -22,6 +22,12 @@ import {
 
 import { DETERMINISTIC_SQLITE_COMPILER_FUNCTIONS } from './deterministic-functions.js'
 
+/** Exact parser identity used by the consensus SQL compiler. */
+export const SQLITE_PARSER_BASELINE = Object.freeze({
+  package: 'sqlite3-parser@0.7.1',
+  grammar: 'SQLite 3.53.0',
+})
+
 export type SqlCompilationMode = 'precondition' | 'body'
 
 export interface SqlSourceSpan {

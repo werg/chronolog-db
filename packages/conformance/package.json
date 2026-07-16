@@ -1,0 +1,12 @@
+{
+  "name": "@chronolog/conformance",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@chronolog/compiler-sqlite": "workspace:*",
+    "@chronolog/materializer-doltlite": "workspace:*",
+    "@chronolog/protocol": "workspace:*",
+    "@dolthub/doltlite": "0.11.29"
+  }
+}

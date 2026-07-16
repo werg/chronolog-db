@@ -2,6 +2,14 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import { ChronologClient, type ClientSqlBindings, type ClientSqlValue } from '@chronolog/client'
+import {
+  MigrationManager,
+  defineMigration,
+  diffCatalogs,
+  generateTypeScriptBindings,
+  inspectCatalog,
+  type MigrationDefinition,
+} from '@chronolog/migrations'
 import { HttpRpcTransport } from '@chronolog/rpc'
 
 interface SqlSpec {
@@ -16,6 +24,13 @@ interface TransactionSpec {
   readonly statements: readonly SqlSpec[]
   readonly wait?: boolean
   readonly idempotencyKey?: string
+}
+interface MigrationSpec {
+  readonly component: string
+  readonly id: string
+  readonly version: number
+  readonly checksum?: string
+  readonly statements: readonly SqlSpec[]
 }
 type JsonSqlValue = null | boolean | number | string | { readonly $int64: string } | { readonly $blob: string }
 
@@ -66,6 +81,34 @@ try {
     case 'evidence': output(await client.getSettlementEvidence(requiredArg(args.shift(), 'evidence TRANSACTION_ID'))); break
     case 'watermark': output(await client.validatorWatermark()); break
     case 'replication': output(await client.getReplicationStatus()); break
+    case 'migrations': {
+      const migrations = new MigrationManager(client)
+      const operation = requiredArg(args.shift(), 'migrations <status|apply|wait> ...')
+      if (operation === 'wait') {
+        const transactionId = requiredArg(args.shift(), 'migrations wait TRANSACTION_ID [--watermark]')
+        output(await migrations.wait(transactionId, { requireWatermark: args.includes('--watermark') }))
+        break
+      }
+      const migration = await migrationFrom(requiredArg(args.shift(), `migrations ${operation} SPEC_JSON_OR_@FILE`))
+      if (operation === 'status') output(await migrations.status(migration))
+      else if (operation === 'apply') output(await migrations.apply(migration, { requireWatermark: args.includes('--watermark') }))
+      else throw new Error(`Unknown migrations operation: ${operation}`)
+      break
+    }
+    case 'catalog': {
+      const operation = requiredArg(args.shift(), 'catalog <inspect|diff|bindings> ...')
+      if (operation === 'diff') {
+        const before = await inspectCatalog(client, requiredArg(args.shift(), 'catalog diff FROM_REVISION TO_REVISION'))
+        const after = await inspectCatalog(client, requiredArg(args.shift(), 'catalog diff FROM_REVISION TO_REVISION'))
+        output(diffCatalogs(before, after))
+      } else {
+        const snapshot = await inspectCatalog(client, args.shift())
+        if (operation === 'inspect') output(snapshot)
+        else if (operation === 'bindings') process.stdout.write(generateTypeScriptBindings(snapshot))
+        else throw new Error(`Unknown catalog operation: ${operation}`)
+      }
+      break
+    }
     default: process.stderr.write(`Unknown command: ${command}\n`); usage(1)
   }
 } finally {
@@ -104,6 +147,26 @@ async function localDefaults(): Promise<{ readonly groupId?: string }> {
 }
 
 async function inlineOrFile(value: string): Promise<string> { return value.startsWith('@') ? readFile(value.slice(1), 'utf8') : value }
+async function migrationFrom(value: string): Promise<MigrationDefinition> {
+  const raw: unknown = JSON.parse(await inlineOrFile(value))
+  if (typeof raw !== 'object' || raw === null) throw new Error('Migration spec must be an object')
+  const spec = raw as Omit<MigrationSpec, 'statements'> & { readonly statements?: unknown }
+  if (!Array.isArray(spec.statements)) throw new Error('Migration spec requires statements')
+  const statements = (spec.statements as readonly unknown[]).map((rawStatement) => {
+    if (typeof rawStatement !== 'object' || rawStatement === null || typeof (rawStatement as { sql?: unknown }).sql !== 'string') {
+      throw new Error('Migration statements require SQL')
+    }
+    const statement = rawStatement as SqlSpec
+    return { sql: statement.sql, parameters: jsonBindings(statement.bindings ?? []) }
+  })
+  return defineMigration({
+    component: spec.component,
+    id: spec.id,
+    version: spec.version,
+    statements,
+    ...(spec.checksum === undefined ? {} : { checksum: spec.checksum }),
+  })
+}
 function requiredArg(value: string | undefined, usageText: string): string { if (value === undefined) throw new Error(`Usage: chronolog ${usageText}`); return value }
 function labelOptions(label?: string): { readonly applicationLabel?: string } { return label === undefined ? {} : { applicationLabel: label } }
 function output(value: unknown): void { process.stdout.write(`${JSON.stringify(value, jsonReplacer, 2)}\n`) }
@@ -113,6 +176,6 @@ function jsonReplacer(_key: string, value: unknown): unknown {
   return value
 }
 function usage(code: number): never {
-  process.stderr.write('Usage: chronolog <status|query|transact|outcome|result|evidence|watermark|replication> ...\n')
+  process.stderr.write('Usage: chronolog <status|query|transact|outcome|result|evidence|watermark|replication|migrations|catalog> ...\n')
   process.exit(code)
 }

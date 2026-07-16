@@ -1,5 +1,8 @@
 # Schema, SQLite Compiler, and Execution Manifest Implementation
 
+Status: historical relational-IR compiler design; superseded where it conflicts
+with Specifications 10 and 11
+
 ## 1. Responsibility
 
 This subsystem converts validated relational IR into a deterministic backend

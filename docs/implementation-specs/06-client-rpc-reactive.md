@@ -1,5 +1,8 @@
 # Client, RPC, Schema Tooling, and Reactive API Implementation
 
+Status: historical relational-IR client plan; the active SQL client/RPC
+contract is defined by Specifications 10 and 11
+
 ## 1. Responsibility
 
 This specification defines how applications construct deterministic queries

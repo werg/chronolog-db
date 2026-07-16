@@ -9,6 +9,14 @@ import {
   createDoltLiteMaterializationRuntime,
   readNativeEngineInfo,
 } from '@chronolog/materializer-doltlite'
+import {
+  MigrationManager,
+  defineMigration,
+  diffCatalogs,
+  generateTypeScriptBindings,
+  inspectCatalog,
+  schemaVersionAssumption,
+} from '@chronolog/migrations'
 import { ChronologNode, type MembershipResolver } from '@chronolog/node-core'
 import { equalBytes, generateEd25519KeyPair } from '@chronolog/protocol'
 import { InProcessRpcTransport, NodeRpcService } from '@chronolog/rpc'
@@ -330,6 +338,80 @@ describe('SQL client → RPC → node → reducer', () => {
     await expect(rollback.getResult()).rejects.toMatchObject({ code: 'result_not_available' })
     expect((await client.query('SELECT name FROM sqlite_schema WHERE name LIKE ?', [`${rollbackPrefix}%`])).result.rows).toEqual([])
     expect((await client.query('SELECT version FROM chaos_schema_migrations WHERE component = ?', [rollbackPrefix])).result.rows).toEqual([])
+  })
+
+  it('applies application migrations idempotently, detects conflicts, and exposes pinned catalog changes', async () => {
+    const { client } = await runtime()
+    const manager = new MigrationManager(client)
+    const first = defineMigration({
+      component: 'profiles',
+      id: 'profiles-v1',
+      version: 1,
+      statements: [
+        { sql: 'CREATE TABLE profiles (id INTEGER PRIMARY KEY, display_name TEXT NOT NULL) STRICT' },
+        { sql: "INSERT INTO profiles VALUES (1, 'Ada')" },
+      ],
+    })
+    const [firstApply, concurrentApply] = await Promise.all([manager.apply(first), manager.apply(first)])
+    expect([firstApply.state, concurrentApply.state].every((state) => state === 'accepted' || state === 'already_applied')).toBe(true)
+    expect([firstApply.state, concurrentApply.state]).toContain('accepted')
+    await expect(manager.apply(first)).resolves.toMatchObject({ state: 'already_applied' })
+
+    const before = await inspectCatalog(client)
+    const migrationChanges = manager.migrationChanges()
+    const schemaChanges = manager.schemaChanges()
+    const unsubscribeMigrations = migrationChanges.subscribe(() => undefined)
+    const unsubscribeSchema = schemaChanges.subscribe(() => undefined)
+    const second = defineMigration({
+      component: 'profiles',
+      id: 'profiles-v2-email',
+      version: 2,
+      statements: [
+        { sql: 'ALTER TABLE profiles ADD COLUMN email TEXT' },
+        { sql: "UPDATE profiles SET email = 'ada@example.test' WHERE id = 1" },
+      ],
+    })
+    expect((await manager.apply(second)).state).toBe('accepted')
+    await waitFor(() => migrationChanges.getSnapshot().value?.result?.rows.some((row) => row[2] === 2n) === true)
+    await waitFor(() => schemaChanges.getSnapshot().value?.revision.materializedRevision !== before.revision.materializedRevision)
+
+    const after = await inspectCatalog(client)
+    expect(diffCatalogs(before, after).changed.map((change) => change.after.name)).toContain('profiles')
+    expect(generateTypeScriptBindings(after)).toContain('readonly "email": string | null')
+
+    const exact = schemaVersionAssumption('profiles', { exact: 2, checksum: second.checksum })
+    const minimum = schemaVersionAssumption('profiles', { minimum: 1 })
+    const oldClient = await client.transaction((tx) => {
+      tx.assert(minimum.sql, minimum.parameters ?? [], { applicationLabel: minimum.applicationLabel })
+      tx.exec("INSERT INTO profiles (id, display_name) VALUES (2, 'Grace')")
+    })
+    const newClient = await client.transaction((tx) => {
+      tx.assert(exact.sql, exact.parameters ?? [], { applicationLabel: exact.applicationLabel })
+      tx.exec("INSERT INTO profiles (id, display_name, email) VALUES (3, 'Lin', 'lin@example.test')")
+    })
+    expect((await terminal(client, oldClient.transactionId)).outcome.type).toBe('accepted')
+    expect((await terminal(client, newClient.transactionId)).outcome.type).toBe('accepted')
+
+    const conflicting = defineMigration({
+      component: 'profiles', id: 'profiles-v2-email', version: 2,
+      statements: [{ sql: 'ALTER TABLE profiles ADD COLUMN email BLOB' }],
+    })
+    await expect(manager.apply(conflicting)).resolves.toMatchObject({ state: 'conflicting_checksum' })
+
+    const rejected = defineMigration({
+      component: 'profiles', id: 'profiles-v3-rejected', version: 3,
+      statements: [
+        { sql: 'CREATE TABLE migration_must_rollback (id INTEGER PRIMARY KEY) STRICT' },
+        { sql: 'INSERT INTO migration_must_rollback VALUES (1), (1)' },
+      ],
+    })
+    await expect(manager.apply(rejected)).resolves.toMatchObject({ state: 'rejected' })
+    expect((await client.query("SELECT name FROM sqlite_schema WHERE name = 'migration_must_rollback'")).result.rows).toEqual([])
+    expect((await manager.status(rejected)).state).toBe('pending')
+    unsubscribeMigrations()
+    unsubscribeSchema()
+    migrationChanges.dispose()
+    schemaChanges.dispose()
   })
 
   it('publishes replay changes through live SQL, outcome resources, and revisioned result availability', async () => {

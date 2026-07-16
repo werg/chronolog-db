@@ -1,5 +1,8 @@
 # Protocol, Node, Validation, and Transport Implementation
 
+Status: historical relational-IR protocol plan; the active transaction format
+is defined by Specifications 10 and 11
+
 ## 1. Responsibility
 
 This specification defines the direct edit to the signed transaction core and

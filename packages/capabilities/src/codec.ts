@@ -55,17 +55,21 @@ function grantToCbor(grant: CapabilityGrant): CborValue {
   } else {
     protocolInvariant(grant.readerScope === undefined && grant.hpkePublicKey === undefined, 'SCHEMA_INVALID', 'Only readers may carry reader fields')
   }
+  if (grant.transportAuthor !== undefined) {
+    protocolInvariant(grant.transportAuthor.length > 0, 'SCHEMA_INVALID', 'Capability transport author must not be empty')
+  }
   const scope = grant.readerScope === undefined ? undefined : BigInt(SCOPES.indexOf(grant.readerScope))
   return integerMap([
     [0, grant.subjectId], [1, grant.signingPublicKey], [2, roleIndex(grant.role)],
     [3, grant.validFromRevision], [4, grant.validUntilRevision], [5, grant.organization],
     [6, grant.validatorClass], [7, grant.minimumAuthorTimestampMs], [8, scope], [9, grant.hpkePublicKey],
+    [10, grant.transportAuthor],
   ])
 }
 
 function grantFromCbor(value: CborValue, field: string): CapabilityGrant {
   const map = expectMap(value, field)
-  assertKnownIntegerKeys(map, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9], field)
+  assertKnownIntegerKeys(map, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10], field)
   const roleValue = expectUint64(required(map, 2, `${field}.role`), `${field}.role`)
   protocolInvariant(roleValue < BigInt(ROLES.length), 'SCHEMA_INVALID', `${field}.role is unknown`)
   const role = ROLES[Number(roleValue)]
@@ -76,6 +80,7 @@ function grantFromCbor(value: CborValue, field: string): CapabilityGrant {
   const floor = optional(map, 7)
   const scopeValue = optional(map, 8)
   const hpkeKey = optional(map, 9)
+  const transportAuthor = optional(map, 10)
   const grant: CapabilityGrant = {
     subjectId: expectBytes(required(map, 0, `${field}.subject_id`), `${field}.subject_id`),
     signingPublicKey: expectBytes(required(map, 1, `${field}.signing_key`), `${field}.signing_key`, 32),
@@ -93,6 +98,7 @@ function grantFromCbor(value: CborValue, field: string): CapabilityGrant {
       })(),
     }),
     ...(hpkeKey === undefined ? {} : { hpkePublicKey: expectBytes(hpkeKey, `${field}.hpke_key`, 32) }),
+    ...(transportAuthor === undefined ? {} : { transportAuthor: expectString(transportAuthor, `${field}.transport_author`) }),
   }
   grantToCbor(grant)
   return grant

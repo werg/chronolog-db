@@ -10,6 +10,8 @@ export type ReaderHistoryScope = 'snapshot' | 'audit'
 export interface CapabilityGrant {
   readonly subjectId: Uint8Array
   readonly signingPublicKey: Uint8Array
+  /** Authenticated outer replication feed authorized for this capability. */
+  readonly transportAuthor?: string
   readonly role: CapabilityRole
   readonly validFromRevision: bigint
   readonly validUntilRevision?: bigint

@@ -93,7 +93,15 @@ export async function reduceCapabilityLog(
 ): Promise<CapabilitySnapshot> {
   let snapshot = await genesisSnapshot(genesis)
   const revisions = [...inputRevisions].sort((a, b) => a.revision.revision < b.revision.revision ? -1 : a.revision.revision > b.revision.revision ? 1 : 0)
-  for (const signed of revisions) {
+  for (const signed of revisions) snapshot = await applyCapabilityRevision(snapshot, signed)
+  return snapshot
+}
+
+/** Applies one verified successor, including after a threshold recovery event. */
+export async function applyCapabilityRevision(
+  snapshot: CapabilitySnapshot,
+  signed: SignedCapabilityRevision,
+): Promise<CapabilitySnapshot> {
     const revision = decodeCapabilityRevision(encodeCapabilityRevision(signed.revision))
     protocolInvariant(equalBytes(revision.groupId, snapshot.groupId), 'SCHEMA_INVALID', 'Capability revision belongs to another group')
     protocolInvariant(revision.revision === snapshot.revision + 1n, 'SCHEMA_INVALID', 'Capability log contains a gap or conflicting revision')
@@ -131,7 +139,7 @@ export async function reduceCapabilityLog(
       policies.set(bytesToHex(id), { id, policy, installedAtRevision: revision.revision })
     }
     const revisionDigest = await capabilityRevisionDigest(revision)
-    snapshot = {
+    return {
       ...snapshot,
       revision: revision.revision,
       revisionDigest,
@@ -140,8 +148,6 @@ export async function reduceCapabilityLog(
       capabilities,
       policies,
     }
-  }
-  return snapshot
 }
 
 export function isCapabilityActive(capability: EffectiveCapability, revision: bigint): boolean {

@@ -78,7 +78,10 @@ export async function applyRecoveryRecord(
     )
   }
   for (const [key, effective] of capabilities) {
-    if (effective.grant.role === 'validator' && effective.revokedAtRevision === undefined) {
+    if (
+      effective.revokedAtRevision === undefined &&
+      (effective.grant.role === 'validator' || equalBytes(effective.grant.signingPublicKey, snapshot.rootAdminPublicKey))
+    ) {
       capabilities.set(key, { ...effective, revokedAtRevision: record.payload.newRevision })
     }
   }

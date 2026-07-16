@@ -40,6 +40,9 @@ Implemented and covered by executable tests:
 - checksummed application migration history, exact/minimum signed schema
   assumptions, revision-pinned catalog inspection/diffing, advisory TypeScript
   bindings, migration/schema live resources, and CLI status/apply/wait flows;
+- replicated signed governance events for live capability grants/revocations,
+  authenticated feed binding, validator changes, HPKE epoch rotation, scoped
+  history access, and 2-of-3 administration recovery;
 - SQL-first daemon, CLI, React hooks, examples, and chaos workloads; and
 - canonical CBOR, signatures, capability/recovery primitives, encryption,
   durable allow-listed SSB replication, deterministic ordering, validator
@@ -83,12 +86,20 @@ protected-state access are prohibited rather than merely unimplemented.
 
 ## Daemon operational profile
 
-The generated daemon configuration is a single participant acting as writer
-and validator. `CHRONOLOG_STATIC_MEMBERSHIP_FILE` enables an out-of-band
-multi-member snapshot pinned to group, membership revision, validation policy,
-thresholds, and exact authenticated SSB feed mappings. It is not a replicated
-administration interface; live onboarding, revocation, recovery, and epoch
-rotation remain operational work.
+The generated daemon configuration bootstraps a signed single-participant
+genesis and persists its private governance material with mode `0600`. The
+daemon replays and follows capability, recovery, and epoch-manifest messages,
+uses revisioned capability snapshots for authorization, and decrypts retained
+epochs through a live key ring. Snapshot readers receive only epochs published
+while authorized; audit readers may receive explicit historical rewraps.
+Threshold recovery replaces the root key and administration feed, revokes
+capabilities tied to the compromised root, and records any deliberate history
+reopening in settlement evidence.
+
+`CHRONOLOG_STATIC_MEMBERSHIP_FILE` is retained as an explicit legacy/testing
+override. Production key custody, packaging, and a polished operator CLI remain
+release-hardening work; the bootstrap recovery keys must not remain co-located
+for a real deployment.
 
 ## Release gates outside this prototype
 
@@ -109,7 +120,6 @@ and [transaction result specification](implementation-specs/11-transaction-resul
 ## Active roadmap
 
 The ordered implementation queue and acceptance criteria live in
-[`upcoming.md`](../upcoming.md). The next release-confidence tranche is
-machine-readable conformance reports and cross-platform replay CI. Historical
-relational-IR plans are kept for design context but are not the active
-transaction roadmap.
+[`upcoming.md`](../upcoming.md). The next implementation tranche is
+deterministic SQL row-choice expansion. Historical relational-IR plans are kept
+for design context but are not the active transaction roadmap.

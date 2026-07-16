@@ -18,6 +18,7 @@ import type {
 } from '@chronolog/materializer'
 import {
   decodeTransactionCore,
+  decodeEnvelope,
   decodeValidatorAttestation,
   decodeValidatorHeartbeat,
   encodeTransactionCore,
@@ -110,8 +111,8 @@ export class ChronologNode {
 
   get identity(): Uint8Array { return this.#options.identity.publicKeyBytes.slice() }
   get groupId(): Uint8Array { return this.#options.groupId.slice() }
-  get membershipRevision(): Uint8Array { return this.#options.membershipRevision.slice() }
-  get validationPolicy(): Uint8Array { return this.#options.validationPolicy.slice() }
+  get membershipRevision(): Uint8Array { return this.#membershipState().membershipRevision.slice() }
+  get validationPolicy(): Uint8Array { return this.#membershipState().validationPolicy.slice() }
   get executionManifestDigest(): Uint8Array {
     return this.#options.materialization.queries.executionManifestDigest
   }
@@ -158,8 +159,8 @@ export class ChronologNode {
   async publish(input: PublishTransactionInput): Promise<PublishedTransaction> {
     this.#assertReady()
     compileSqlProgram(input.program)
-    const membershipRevision = input.membershipRevision ?? this.#options.membershipRevision
-    const validationPolicy = input.validationPolicy ?? this.#options.validationPolicy
+    const membershipRevision = input.membershipRevision ?? this.membershipRevision
+    const validationPolicy = input.validationPolicy ?? this.validationPolicy
     const allocated = input.authorTimestampMs === undefined && input.nonce === undefined
       ? this.#allocateTransactionContext()
       : {
@@ -212,26 +213,28 @@ export class ChronologNode {
     this.#assertReady()
     const validator = this.#options.validator
     if (!validator) throw new Error('NODE_NOT_VALIDATOR')
+    const validatorCapability = this.#validatorCapability()
+    if (validatorCapability === undefined) throw new Error('NODE_VALIDATOR_CAPABILITY_UNAVAILABLE')
     if (!await this.#heartbeatAuthorized({
       groupId: this.#options.groupId,
-      membershipRevision: this.#options.membershipRevision,
+      membershipRevision: this.membershipRevision,
       validatorId: this.identity,
-      validatorCapability: validator.capabilityId,
+      validatorCapability,
     })) throw new Error('VALIDATOR_UNAUTHORIZED')
     if (!await this.#membershipAllowsTransportAuthor(
       this.#options.transport.identity,
       'validator',
       this.identity,
-      this.#options.membershipRevision,
-      validator.capabilityId,
+      this.membershipRevision,
+      validatorCapability,
     )) throw new Error('LOCAL_TRANSPORT_AUTHOR_UNAUTHORIZED')
     const now = this.#clockNow()
     this.#advanceValidatorCutoff(now)
     this.#persistValidatorCutoff()
     const heartbeat: ValidatorHeartbeat = {
       groupId: this.#options.groupId,
-      membershipRevision: this.#options.membershipRevision,
-      validatorCapability: validator.capabilityId,
+      membershipRevision: this.membershipRevision,
+      validatorCapability,
       validatorId: this.identity,
       acceptanceCutoffMs: this.#acceptedAboveMs,
     }
@@ -245,6 +248,11 @@ export class ChronologNode {
     await this.#mutex.run(async () => {
       if (this.#seen.has(record.id)) return
       try {
+        const envelope = decodeEnvelope(record.payload)
+        if (envelope.messageType !== 'candidate' && envelope.messageType !== 'attestation' && envelope.messageType !== 'heartbeat') {
+          this.#seen.add(record.id)
+          return
+        }
         const wire = await this.#decodeRecord(record)
         if (wire.type === 'candidate') await this.#ingestCandidate(record, wire.payload, wire.signer)
         else if (wire.type === 'attestation') await this.#ingestAttestation(record, wire.payload, wire.signer)
@@ -366,8 +374,8 @@ export class ChronologNode {
   async isWritable(): Promise<boolean> {
     return this.#options.membership.canWrite({
       groupId: this.#options.groupId,
-      membershipRevision: this.#options.membershipRevision,
-      validationPolicy: this.#options.validationPolicy,
+      membershipRevision: this.membershipRevision,
+      validationPolicy: this.validationPolicy,
       writerId: this.identity,
     })
   }
@@ -453,6 +461,8 @@ export class ChronologNode {
   async #maybeAttest(txId: Uint8Array, candidate: StoredCandidate, core: TransactionCore): Promise<void> {
     const validator = this.#options.validator
     if (!validator) return
+    const validatorCapability = this.#validatorCapability()
+    if (validatorCapability === undefined) return
     const now = this.#clockNow()
     this.#advanceValidatorCutoff(now)
     this.#persistValidatorCutoff()
@@ -464,7 +474,7 @@ export class ChronologNode {
       validationPolicy: core.validationPolicy,
       writerId: core.authorId,
       validatorId: this.identity,
-      validatorCapability: validator.capabilityId,
+      validatorCapability,
     }
     if (!await this.#options.membership.canValidate(context)) return
     if (!await this.#membershipAllowsTransportAuthor(
@@ -472,7 +482,7 @@ export class ChronologNode {
       'validator',
       this.identity,
       core.membershipRevision,
-      validator.capabilityId,
+      validatorCapability,
     )) throw new Error('LOCAL_TRANSPORT_AUTHOR_UNAUTHORIZED')
     if (this.#control.attestationsFor(txId).some((item) => equalBytes(item.validatorId, this.identity))) return
     const policyVersion = await this.#expectedPolicyVersion(core)
@@ -482,7 +492,7 @@ export class ChronologNode {
     const attestation: ValidatorAttestation = {
       groupId: core.groupId,
       membershipRevision: core.membershipRevision,
-      validatorCapability: validator.capabilityId,
+      validatorCapability,
       txId,
       validatorId: this.identity,
       authorTimestampMs: core.authorTimestampMs,
@@ -874,6 +884,16 @@ export class ChronologNode {
       ...(validatorCapability === undefined ? {} : { validatorCapability }),
     })
   }
+  #membershipState() {
+    return this.#options.membershipState?.() ?? {
+      membershipRevision: this.#options.membershipRevision,
+      validationPolicy: this.#options.validationPolicy,
+      ...(this.#options.validator === undefined ? {} : { validatorCapability: this.#options.validator.capabilityId }),
+    }
+  }
+  #validatorCapability(): Uint8Array | undefined {
+    return this.#membershipState().validatorCapability
+  }
   async #heartbeatAuthorized(context: {
     readonly groupId: Uint8Array
     readonly membershipRevision: Uint8Array
@@ -883,10 +903,10 @@ export class ChronologNode {
     if (this.#options.membership.canHeartbeat !== undefined) {
       return this.#options.membership.canHeartbeat(context)
     }
-    if (!equalBytes(context.membershipRevision, this.#options.membershipRevision)) return false
+    if (!equalBytes(context.membershipRevision, this.membershipRevision)) return false
     return this.#options.membership.canValidate({
       ...context,
-      validationPolicy: this.#options.validationPolicy,
+      validationPolicy: this.validationPolicy,
       writerId: context.validatorId,
     })
   }

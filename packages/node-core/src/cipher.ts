@@ -1,7 +1,7 @@
 import { decryptEpochPayload, encryptEpochPayload } from '@chronolog/crypto'
-import { assertCanonicalCbor, encodeCanonicalCbor } from '@chronolog/protocol'
+import { assertCanonicalCbor, bytesToHex, encodeCanonicalCbor } from '@chronolog/protocol'
 
-import type { EnvelopeCipher } from './types.js'
+import type { EnvelopeCipher, EnvelopeCipherResolver } from './types.js'
 
 /** Adapts a group epoch content key to authenticated transport envelopes. */
 export function createEpochEnvelopeCipher(
@@ -32,3 +32,48 @@ export function createEpochEnvelopeCipher(
     },
   }
 }
+
+/** Mutable operational key ring; only governance may advance its current key. */
+export class EpochCipherRing implements EnvelopeCipherResolver {
+  readonly #epochs = new Map<string, EnvelopeCipher>()
+  #currentKey: string | undefined
+
+  install(contentKey: Uint8Array, epoch: bigint, makeCurrent = false): EnvelopeCipher {
+    const cipher = createEpochEnvelopeCipher(contentKey, epoch)
+    const key = epochKey(cipher.epochId)
+    const existing = this.#epochs.get(key)
+    if (existing !== undefined) {
+      if (makeCurrent) this.#currentKey = key
+      return existing
+    }
+    this.#epochs.set(key, cipher)
+    if (makeCurrent || this.#currentKey === undefined) this.#currentKey = key
+    return cipher
+  }
+
+  current(): EnvelopeCipher {
+    const cipher = this.#currentKey === undefined ? undefined : this.#epochs.get(this.#currentKey)
+    if (cipher === undefined) throw new Error('EPOCH_CIPHER_CURRENT_UNAVAILABLE')
+    return cipher
+  }
+
+  resolve(epochId: Uint8Array): EnvelopeCipher | undefined {
+    return this.#epochs.get(epochKey(epochId))
+  }
+
+  remove(epoch: bigint): void {
+    const key = epochKey(encodeCanonicalCbor(epoch))
+    if (key === this.#currentKey) throw new Error('EPOCH_CIPHER_CURRENT_REMOVAL_PROHIBITED')
+    this.#epochs.delete(key)
+  }
+
+  epochs(): readonly bigint[] {
+    return [...this.#epochs.values()].map((cipher) => {
+      const value = assertCanonicalCbor(cipher.epochId)
+      if (typeof value !== 'bigint') throw new Error('EPOCH_CIPHER_ID_INVALID')
+      return value
+    }).sort((a, b) => a < b ? -1 : a > b ? 1 : 0)
+  }
+}
+
+function epochKey(value: Uint8Array): string { return bytesToHex(value) }

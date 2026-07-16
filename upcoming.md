@@ -88,7 +88,7 @@ Acceptance:
 
 ## Project 5 — Operational capability and epoch control plane
 
-Status: in progress
+Status: complete
 
 - Implement live onboarding/removal, capability grant/revocation, recovery,
   epoch/content-key rotation, and historical-access policy.
@@ -98,13 +98,13 @@ Status: in progress
 
 Acceptance:
 
-- [ ] Multi-node tests onboard, revoke, rotate, recover, and converge.
-- [ ] Removed participants cannot author, validate, or decrypt new epochs.
-- [ ] Recovery and history-reopening effects are visible in settlement evidence.
+- [x] Multi-node tests onboard, revoke, rotate, recover, and converge.
+- [x] Removed participants cannot author, validate, or decrypt new epochs.
+- [x] Recovery and history-reopening effects are visible in settlement evidence.
 
 ## Project 6 — Deterministic SQL row-choice expansion
 
-Status: pending
+Status: in progress
 
 - Add canonical REAL input bindings.
 - Complete scalar subqueries and nested/unordered `LIMIT` proofs.

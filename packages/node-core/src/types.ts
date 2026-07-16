@@ -27,6 +27,12 @@ export interface EnvelopeCipher {
   open(ciphertext: Uint8Array, associatedData: Uint8Array): Promise<Uint8Array>
 }
 
+/** Resolves the current writer key and retained reader keys across rotations. */
+export interface EnvelopeCipherResolver {
+  current(): EnvelopeCipher
+  resolve(epochId: Uint8Array): EnvelopeCipher | undefined
+}
+
 export interface CandidateAdmissionContext {
   readonly groupId: Uint8Array
   readonly membershipRevision: Uint8Array
@@ -89,6 +95,12 @@ export interface ValidatorOptions {
   readonly initialAcceptedAboveMs?: bigint
 }
 
+export interface OperationalMembershipState {
+  readonly membershipRevision: Uint8Array
+  readonly validationPolicy: Uint8Array
+  readonly validatorCapability?: Uint8Array
+}
+
 export interface ChronologNodeOptions {
   readonly groupId: Uint8Array
   readonly groupRoute?: Uint8Array
@@ -98,11 +110,13 @@ export interface ChronologNodeOptions {
   readonly transport: ChronologTransport
   readonly materialization: ChronologMaterializationRuntime
   readonly membership: MembershipResolver
+  /** Live governance head used for newly authored records and validator work. */
+  readonly membershipState?: () => OperationalMembershipState
   readonly controlStore?: ControlStore
   readonly validator?: ValidatorOptions
   readonly clock?: Clock
   readonly random?: RandomSource
-  readonly envelopeCipher?: EnvelopeCipher
+  readonly envelopeCipher?: EnvelopeCipher | EnvelopeCipherResolver
   /** Maximum transiently failed records retained before history-backed recovery takes over. */
   readonly maximumRetryRecords?: number
 }

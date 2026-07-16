@@ -80,7 +80,6 @@ export class CapabilityMembershipResolver implements MembershipResolver {
   }
 
   async canUseTransportAuthor(context: TransportAuthorContext): Promise<boolean> {
-    if (!this.#transportAuthorForCapability) return false
     const snapshot = await this.#snapshot({
       groupId: context.groupId,
       membershipRevision: context.membershipRevision,
@@ -98,7 +97,10 @@ export class CapabilityMembershipResolver implements MembershipResolver {
       !this.#activeRole(capability, snapshot, context.role) ||
       !equalBytes(capability.grant.signingPublicKey, context.signingId)
     ) return false
-    return await this.#transportAuthorForCapability(capability, snapshot) === context.transportAuthor
+    const authorized = this.#transportAuthorForCapability === undefined
+      ? capability.grant.transportAuthor ?? null
+      : await this.#transportAuthorForCapability(capability, snapshot)
+    return authorized === context.transportAuthor
   }
 
   async selectAdmission(

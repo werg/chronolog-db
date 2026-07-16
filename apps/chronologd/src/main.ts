@@ -1,54 +1,35 @@
 import { join, resolve } from 'node:path'
 
 import { createCoreExecutionManifest } from '@chronolog/compiler-sqlite'
+import { isCapabilityActive } from '@chronolog/capabilities'
 import { ControlStore, JsonFileControlStorePersistence } from '@chronolog/control-store'
 import {
   DeterministicMaterializer,
   createDoltLiteMaterializationRuntime,
   readNativeEngineInfo,
 } from '@chronolog/materializer-doltlite'
-import { ChronologNode, createEpochEnvelopeCipher, type MembershipResolver } from '@chronolog/node-core'
+import {
+  CapabilityMembershipResolver,
+  ChronologNode,
+  GovernanceControlPlane,
+  createEpochEnvelopeCipher,
+  type MembershipResolver,
+} from '@chronolog/node-core'
 import { equalBytes } from '@chronolog/protocol'
 import { HttpRpcServer, NodeRpcService } from '@chronolog/rpc'
 import { SsbDb2Transport, type SsbPeer } from '@chronolog/transport-ssb'
 
 import { fromBase64, loadOrCreateConfig, parseDaemonRuntimeConfig } from './config.js'
+import { loadOrCreateGovernanceBootstrap } from './governance-config.js'
 import { loadStaticMembership } from './static-membership.js'
 
 const dataDirectory = resolve(process.env.CHRONOLOG_DATA_DIR ?? '.chronolog')
 const runtime = parseDaemonRuntimeConfig(process.env)
 const { config, identity } = await loadOrCreateConfig(dataDirectory)
 const groupId = fromBase64(config.groupId)
-const membershipRevision = fromBase64(config.membershipRevision)
-const validationPolicy = fromBase64(config.validationPolicy)
-const validatorCapability = fromBase64(config.validatorCapability)
-
-// Standalone bootstrap profile: a root-controlled single participant. Replace
-// this resolver with reduceCapabilityLog(...) or an external membership source
-// when adding participants; node-core never assumes a fixed validator list.
-const standaloneMembership: MembershipResolver = {
-  canWrite: (context) =>
-    equalBytes(context.membershipRevision, membershipRevision) &&
-    equalBytes(context.writerId, identity.publicKeyBytes),
-  canValidate: (context) =>
-    equalBytes(context.membershipRevision, membershipRevision) &&
-    equalBytes(context.validatorId, identity.publicKeyBytes) &&
-    equalBytes(context.validatorCapability, validatorCapability),
-  threshold: () => 1,
-  watermarkPolicy: () => ({
-    kind: 'threshold',
-    policyId: Buffer.from(validationPolicy).toString('base64url'),
-    validatorIds: [identity.publicKeyBytes],
-    threshold: 1,
-  }),
-}
-const membership = process.env.CHRONOLOG_STATIC_MEMBERSHIP_FILE === undefined
-  ? standaloneMembership
-  : await loadStaticMembership(resolve(process.env.CHRONOLOG_STATIC_MEMBERSHIP_FILE), {
-      groupId,
-      membershipRevision,
-      validationPolicy,
-    })
+const configuredMembershipRevision = fromBase64(config.membershipRevision)
+const configuredValidationPolicy = fromBase64(config.validationPolicy)
+const configuredValidatorCapability = fromBase64(config.validatorCapability)
 
 const configuredPeers: readonly SsbPeer[] = runtime.peers
 const nativeEngine = readNativeEngineInfo()
@@ -56,7 +37,7 @@ const executionManifest = createCoreExecutionManifest({
   profile: 'chronolog-core-portable',
   engineDigest: nativeEngine.digest,
 })
-const { transport, materializer, node, server, address } = await startRuntime()
+const { transport, materializer, node, server, address, governance } = await startRuntime()
 process.stdout.write(`${JSON.stringify({
   event: 'chronologd.ready',
   url: address.url,
@@ -66,6 +47,9 @@ process.stdout.write(`${JSON.stringify({
   ssbAddress: transport.address(runtime.ssbScope),
   materializer: materializer.backend,
   executionManifestDigest: Buffer.from(materializer.executionManifestDigest).toString('base64url'),
+  membershipRevision: Buffer.from(node.membershipRevision).toString('base64url'),
+  governanceRevision: governance?.snapshot.revision.toString() ?? null,
+  encryptionEpoch: governance?.currentEpoch?.toString() ?? config.epoch,
 })}\n`)
 
 let stopping = false
@@ -74,6 +58,7 @@ async function stop(signal: string): Promise<void> {
   stopping = true
   process.stdout.write(`${JSON.stringify({ event: 'chronologd.stopping', signal })}\n`)
   await server.close()
+  await governance?.close()
   await node.close()
 }
 
@@ -110,12 +95,77 @@ async function startRuntime() {
   let materializer: DeterministicMaterializer | undefined
   let node: ChronologNode | undefined
   let server: HttpRpcServer | undefined
+  let governance: GovernanceControlPlane | undefined
   try {
     materializer = await DeterministicMaterializer.open({
       path: join(dataDirectory, 'application.db'),
       checkpointEvery: runtime.checkpointEvery,
       executionManifest,
     })
+    const controlStore = new ControlStore(new JsonFileControlStorePersistence(join(dataDirectory, 'control.json')))
+    let membership: MembershipResolver
+    let membershipRevision = configuredMembershipRevision
+    let validationPolicy = configuredValidationPolicy
+    let validatorCapability = configuredValidatorCapability
+    let envelopeCipher = createEpochEnvelopeCipher(fromBase64(config.epochContentKey), BigInt(config.epoch))
+    let membershipState: (() => {
+      readonly membershipRevision: Uint8Array
+      readonly validationPolicy: Uint8Array
+      readonly validatorCapability?: Uint8Array
+    }) | undefined
+    if (process.env.CHRONOLOG_STATIC_MEMBERSHIP_FILE !== undefined) {
+      membership = await loadStaticMembership(resolve(process.env.CHRONOLOG_STATIC_MEMBERSHIP_FILE), {
+        groupId,
+        membershipRevision,
+        validationPolicy,
+      })
+    } else {
+      const bootstrap = await loadOrCreateGovernanceBootstrap({
+        dataDirectory,
+        groupId,
+        schemaId: materializer.executionManifestDigest,
+        identity,
+        transportAuthor: transport.identity,
+      })
+      governance = await GovernanceControlPlane.create({
+        genesis: bootstrap.genesis,
+        groupRoute: fromBase64(config.groupRoute),
+        transport,
+        identity,
+        recipient: { id: bootstrap.recipientId, privateKey: bootstrap.recipientPrivateKey },
+        onHistoryReopened: (event) => controlStore.recordHistoryReopening({
+          id: event.id,
+          floorMs: 0n,
+          membershipRevision: event.membershipRevision,
+          reason: event.reason,
+        }),
+      })
+      await governance.start()
+      if (governance.currentEpoch === null) {
+        await governance.rotateEpoch(identity.privateKey, fromBase64(config.epochContentKey))
+      }
+      membership = new CapabilityMembershipResolver({
+        snapshotForRevision: (digest) => governance!.snapshotForRevision(digest),
+      })
+      validationPolicy = bootstrap.validationPolicyId
+      const state = () => {
+        const snapshot = governance!.snapshot
+        const activeValidator = [...snapshot.capabilities.values()].find((capability) =>
+          capability.grant.role === 'validator' &&
+          equalBytes(capability.grant.signingPublicKey, identity.publicKeyBytes) &&
+          isCapabilityActive(capability, snapshot.revision))
+        return {
+          membershipRevision: snapshot.revisionDigest,
+          validationPolicy,
+          ...(activeValidator === undefined ? {} : { validatorCapability: activeValidator.id }),
+        }
+      }
+      const initial = state()
+      membershipRevision = initial.membershipRevision
+      validatorCapability = initial.validatorCapability ?? configuredValidatorCapability
+      membershipState = state
+      envelopeCipher = governance.cipherRing.current()
+    }
     node = new ChronologNode({
       groupId,
       groupRoute: fromBase64(config.groupRoute),
@@ -124,15 +174,16 @@ async function startRuntime() {
       identity,
       transport,
       materialization: createDoltLiteMaterializationRuntime(materializer),
-      controlStore: new ControlStore(new JsonFileControlStorePersistence(join(dataDirectory, 'control.json'))),
+      controlStore,
       membership,
+      ...(membershipState === undefined ? {} : { membershipState }),
       validator: {
         capabilityId: validatorCapability,
         cutoffLagMs: runtime.cutoffLagMs,
         maxFutureSkewMs: runtime.maxFutureSkewMs,
         heartbeatIntervalMs: runtime.heartbeatIntervalMs,
       },
-      envelopeCipher: createEpochEnvelopeCipher(fromBase64(config.epochContentKey), BigInt(config.epoch)),
+      envelopeCipher: governance?.cipherRing ?? envelopeCipher,
     })
     await node.start()
     server = new HttpRpcServer({
@@ -142,9 +193,10 @@ async function startRuntime() {
       ...(runtime.token === undefined ? {} : { token: runtime.token }),
     })
     const address = await server.listen()
-    return { transport, materializer, node, server, address }
+    return { transport, materializer, node, server, address, governance }
   } catch (error) {
     await server?.close().catch(() => undefined)
+    await governance?.close().catch(() => undefined)
     if (node !== undefined) {
       await node.close().catch(() => undefined)
     } else {

@@ -1,5 +1,6 @@
 export * from './async.js'
 export * from './cipher.js'
+export * from './governance.js'
 export * from './capability-membership.js'
 export * from './node.js'
 export * from './types.js'

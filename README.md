@@ -153,9 +153,17 @@ connection and feed, while Chronolog independently verifies the inner protocol
 signature, capability revision, validation policy, group route, epoch, and
 ciphertext.
 
-Without `CHRONOLOG_STATIC_MEMBERSHIP_FILE`, the daemon uses its generated
-single-participant writer/validator policy. A multi-member static deployment
-points every daemon at the same recovery-controlled JSON snapshot, whose group,
+Without `CHRONOLOG_STATIC_MEMBERSHIP_FILE`, the daemon creates or reloads a
+signed governance genesis in `governance.json`, consumes replicated capability,
+recovery, and epoch-manifest records, and changes authorization and encryption
+keys without a restart. The bootstrap grants the local identity administrator,
+schema-administrator, writer, validator, and audit-reader roles and creates a
+2-of-3 development recovery kit. The file is mode `0600`; production operators
+must export the recovery keys to independent offline custody before treating a
+group as durable. See the [governance guide](docs/governance.md).
+
+`CHRONOLOG_STATIC_MEMBERSHIP_FILE` remains an explicit legacy/testing override.
+It points every daemon at the same out-of-band JSON snapshot, whose group,
 membership revision, and validation policy must match the corresponding values
 in each node's `config.json`:
 
@@ -196,12 +204,11 @@ without the mapping may parse, but cannot authorize that participant's
 transport traffic.
 
 The static file is an out-of-band bootstrap snapshot, not replicated consensus
-state and not a live administration interface. The capability and crypto
-packages implement signed capability reduction, recovery, and epoch-key
-wrapping, and `node-core` accepts a `CapabilityMembershipResolver`, but the
-shipped daemon does not yet run a capability/epoch control plane or expose
-onboarding, rotation, or revocation commands. Operators must provision matching
-static snapshots and epoch configuration to all participants and restart them.
+state and not a live administration interface. In the default profile,
+`GovernanceControlPlane` is the programmatic administration surface for live
+grants, revocation, epoch rotation, audit-history rewrapping, and threshold
+recovery. A hardened operator CLI and separation of recovery/private device
+keys from the daemon store remain release work.
 
 ## Workspace
 

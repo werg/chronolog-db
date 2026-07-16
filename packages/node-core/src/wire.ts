@@ -14,7 +14,7 @@ import {
   type ProtocolDomain,
 } from '@chronolog/protocol'
 
-import type { EnvelopeCipher } from './types.js'
+import type { EnvelopeCipher, EnvelopeCipherResolver } from './types.js'
 
 export interface SignedWireMessage {
   readonly type: Extract<EnvelopeMessageType, 'candidate' | 'attestation' | 'heartbeat'>
@@ -36,8 +36,9 @@ export async function encodeSignedEnvelope(
   type: SignedWireMessage['type'],
   payload: Uint8Array,
   signer: Ed25519KeyPair,
-  cipher?: EnvelopeCipher,
+  cipher?: EnvelopeCipher | EnvelopeCipherResolver,
 ): Promise<Uint8Array> {
+  const activeCipher = cipher === undefined ? undefined : isCipherResolver(cipher) ? cipher.current() : cipher
   const signature = await signDomain(domainFor(type), payload, signer.privateKey)
   const wire = encodeCanonicalCbor([
     1n,
@@ -46,10 +47,10 @@ export async function encodeSignedEnvelope(
     signer.publicKeyBytes,
     signature,
   ])
-  const epochId = cipher?.epochId ?? null
-  const envelopePayload = cipher === undefined
+  const epochId = activeCipher?.epochId ?? null
+  const envelopePayload = activeCipher === undefined
     ? wire
-    : await cipher.seal(wire, envelopeAssociatedData(groupRoute, type, cipher.epochId))
+    : await activeCipher.seal(wire, envelopeAssociatedData(groupRoute, type, activeCipher.epochId))
   return encodeEnvelope({
     groupRoute,
     messageType: type,
@@ -62,7 +63,7 @@ export async function encodeSignedEnvelope(
 export async function decodeSignedEnvelope(
   encoded: Uint8Array,
   expectedGroupRoute: Uint8Array,
-  cipher?: EnvelopeCipher,
+  cipher?: EnvelopeCipher | EnvelopeCipherResolver,
 ): Promise<SignedWireMessage> {
   const envelope = decodeEnvelope(encoded)
   if (!equalBytes(envelope.groupRoute, expectedGroupRoute)) throw wireError('WIRE_WRONG_GROUP')
@@ -70,14 +71,16 @@ export async function decodeSignedEnvelope(
   if (!equalBytes(await hashDomain(DOMAINS.envelope, envelope.payload.bytes), envelope.payloadDigest)) {
     throw wireError('WIRE_DIGEST_MISMATCH')
   }
+  const activeCipher = envelope.encryptionEpoch === null || cipher === undefined
+    ? undefined
+    : isCipherResolver(cipher) ? cipher.resolve(envelope.encryptionEpoch) : cipher
   if ((envelope.encryptionEpoch === null) !== (cipher === undefined)) throw wireError('WIRE_ENCRYPTION_REQUIRED')
-  if (
-    envelope.encryptionEpoch !== null &&
-    (cipher === undefined || !equalBytes(envelope.encryptionEpoch, cipher.epochId))
-  ) throw wireError('WIRE_ENCRYPTION_EPOCH_UNKNOWN')
-  const wireBytes = cipher === undefined
+  if (envelope.encryptionEpoch !== null && (activeCipher === undefined || !equalBytes(envelope.encryptionEpoch, activeCipher.epochId))) {
+    throw wireError('WIRE_ENCRYPTION_EPOCH_UNKNOWN')
+  }
+  const wireBytes = activeCipher === undefined
     ? envelope.payload.bytes
-    : await cipher.open(
+    : await activeCipher.open(
       envelope.payload.bytes,
       envelopeAssociatedData(expectedGroupRoute, envelope.messageType as SignedWireMessage['type'], envelope.encryptionEpoch!),
     )
@@ -104,6 +107,10 @@ export async function decodeSignedEnvelope(
     throw wireError('WIRE_SIGNATURE_INVALID')
   }
   return { type, payload, signer, signature }
+}
+
+function isCipherResolver(value: EnvelopeCipher | EnvelopeCipherResolver): value is EnvelopeCipherResolver {
+  return 'current' in value && typeof value.current === 'function'
 }
 
 function envelopeAssociatedData(

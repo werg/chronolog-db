@@ -123,10 +123,11 @@ held by one OS account into an independent recovery quorum.
 
 Feed author/sequence/previous conflicts are persisted and quarantine the node;
 quarantined nodes report degraded, refuse new publication, and expose bounded
-Prometheus metrics. Signed snapshot manifests and content-addressed envelope
-blob stores have exact verification primitives, but snapshot replacement and
-inter-node blob fetching are not enabled. Optional public SSB address discovery
-uses only an explicitly configured address or bounded HTTPS discovery service.
+Prometheus metrics and an operator doctor check. Signed snapshot archives have
+staged Dolt/log validation, atomic replacement, and signed-head fork repair.
+Opt-in content-addressed envelope blobs support authenticated bounded inter-node
+fetch and immutable retention. Public SSB discovery can require an
+external-vantage address/key reachability proof and degrades health without it.
 
 ## Release gates outside this prototype
 
@@ -134,10 +135,9 @@ uses only an explicitly configured address or bounded HTTPS discovery service.
   the measured 3.53/3.54 compatibility boundary;
 - validation of the configured Linux/macOS portable replay digest comparison,
   plus deterministic resource characterization on release hardware;
-- signed installable distributions, non-Linux/hardware-backed key providers,
-  and external security review; and
-- trusted snapshot archive/replacement and full feed-fork rebuild, inter-node
-  blob fetching, verified NAT traversal, and pilot sizing/runbooks.
+- non-Linux/hardware-backed key providers and external security review; and
+- witnessed pilot evidence for custody/recovery, prior-version upgrade,
+  snapshot/fork repair, multi-host blobs, traversal, sizing, and alerting.
 
 The current internal authorizer/protocol assessment and unresolved release
 findings are recorded in [the threat review](security-threat-review.md).

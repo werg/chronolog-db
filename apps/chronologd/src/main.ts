@@ -27,7 +27,7 @@ import { SsbDb2Transport, type SsbPeer } from '@chronolog/transport-ssb'
 import { fromBase64, loadOrCreateConfig, parseDaemonRuntimeConfig } from './config.js'
 import { loadOrCreateGovernanceBootstrap } from './governance-config.js'
 import { loadStaticMembership } from './static-membership.js'
-import { discoverPublicSsbAddress } from './nat-discovery.js'
+import { discoverPublicSsbAddress, verifyPublicSsbReachability, type NatVerificationResult } from './nat-discovery.js'
 import { daemonHealth, prometheusMetrics } from './observability.js'
 import { daemonSecretStoreFromEnvironment } from './secret-store.js'
 import { createGovernanceRpcAdmin } from './governance-admin.js'
@@ -62,6 +62,8 @@ process.stdout.write(`${JSON.stringify({
   publicSsbAddress: nat.address,
   publicSsbAddressSource: nat.source,
   natDiscoveryError: nat.error ?? null,
+  publicSsbReachability: nat.reachability.status,
+  publicSsbReachabilityError: nat.reachability.error ?? null,
   materializer: materializer.backend,
   executionManifestDigest: Buffer.from(materializer.executionManifestDigest).toString('base64url'),
   membershipRevision: Buffer.from(node.membershipRevision).toString('base64url'),
@@ -116,6 +118,7 @@ async function startRuntime() {
   let node: ChronologNode | undefined
   let server: HttpRpcServer | undefined
   let governance: GovernanceControlPlane | undefined
+  let reachability: NatVerificationResult = { status: 'not-configured', address: null }
   try {
     materializer = await DeterministicMaterializer.open({
       path: join(dataDirectory, 'application.db'),
@@ -237,8 +240,8 @@ async function startRuntime() {
       host: runtime.host,
       port: runtime.port,
       ...(runtime.token === undefined ? {} : { token: runtime.token }),
-      health: async () => daemonHealth(await node!.status(), stopping),
-      metrics: async () => prometheusMetrics(await node!.status()),
+      health: async () => daemonHealth(await node!.status(), stopping, traversalError(runtime.ssbScope, reachability)),
+      metrics: async () => prometheusMetrics(await node!.status(), traversalError(runtime.ssbScope, reachability)),
       ...(localBlobStore === undefined ? {} : { blob: (digest: Uint8Array) => localBlobStore.get(digest) }),
     })
     const address = await server.listen()
@@ -247,7 +250,12 @@ async function startRuntime() {
       ...(runtime.publicSsbAddress === undefined ? {} : { explicitAddress: runtime.publicSsbAddress }),
       ...(runtime.natDiscoveryUrl === undefined ? {} : { discoveryUrl: runtime.natDiscoveryUrl }),
     })
-    return { transport, materializer, node, server, address, governance, nat }
+    reachability = await verifyPublicSsbReachability({
+      address: nat.address,
+      timeoutMs: runtime.natDiscoveryTimeoutMs,
+      ...(runtime.natVerificationUrl === undefined ? {} : { verificationUrl: runtime.natVerificationUrl }),
+    })
+    return { transport, materializer, node, server, address, governance, nat: { ...nat, reachability } }
   } catch (error) {
     await server?.close().catch(() => undefined)
     await governance?.close().catch(() => undefined)
@@ -259,4 +267,10 @@ async function startRuntime() {
     }
     throw error
   }
+}
+
+function traversalError(scope: 'device' | 'local' | 'public', result: NatVerificationResult): string | undefined {
+  if (scope !== 'public') return undefined
+  if (result.status === 'verified') return undefined
+  return result.error ?? 'PUBLIC_SSB_REACHABILITY_NOT_VERIFIED'
 }

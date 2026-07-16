@@ -196,6 +196,10 @@ data-directory lock; see the [snapshot recovery guide](docs/snapshot-recovery.md
 Large encrypted envelopes can opt into authenticated cross-node chunk fetch
 and verified read-through retention; see the [blob replication guide](docs/blob-replication.md).
 
+Pilot operators should use `chronolog doctor` and follow the
+[native-daemon pilot runbook](docs/pilot-runbook.md), including external SSB
+reachability proof and the required witnessed recovery/restore/repair drills.
+
 `CHRONOLOG_STATIC_MEMBERSHIP_FILE` remains an explicit legacy/testing override.
 It points every daemon at the same out-of-band JSON snapshot, whose group,
 membership revision, and validation policy must match the corresponding values
@@ -241,8 +245,8 @@ The static file is an out-of-band bootstrap snapshot, not replicated consensus
 state and not a live administration interface. In the default profile,
 `chronolog governance` provides status, live grants/revocations, epoch
 rotation, audit-history rewrapping, and relay of an offline-signed threshold
-recovery record. Independent recovery custody and the packaged offline signing
-ceremony remain release work.
+recovery record. Verified export/purge and offline signing tooling are shipped;
+the independent-custodian pilot ceremony remains a release gate.
 
 ## Workspace
 
@@ -304,10 +308,8 @@ compilation. Exact JSON, decimal, and ordinary vector values are available
 through the deterministic compiler. See the [extension profile](docs/extensions.md)
 for the native-versus-consensus boundary.
 
-Before production use, the remaining work is operational hardening: a reviewed
-and signed distribution of the small DoltLite authorizer shim, non-Linux and
-hardware-backed key providers,
-capability and epoch administration commands in the daemon, remote blob fetch,
-trusted snapshot replacement and full fork repair, verified NAT traversal,
-deployment-specific resource sizing, and external security review. The
-implementation plan retains the full acceptance criteria for those items.
+Before production use, the remaining work is witnessed pilot execution of the
+implemented custody, snapshot/fork, blob, traversal, alerting, and upgrade
+workflows; non-Linux/hardware-backed key providers; resolution of recorded
+security findings; and an independent external security review. The
+implementation plan retains the full acceptance criteria.

@@ -187,7 +187,7 @@ Acceptance:
 - [ ] No unresolved release-blocking fuzz, sanitizer, crash, or security finding.
 - [ ] Pilot operators can install, onboard, rotate, recover, inspect, and
       upgrade without editing internal stores.
-- [ ] The active manifest advertises no unimplemented or unproven feature.
+- [x] The active manifest advertises no unimplemented or unproven feature.
 
 Progress:
 
@@ -203,7 +203,7 @@ Progress:
 - [x] Persistent feed-fork quarantine, degraded/non-writable behavior, and
       complete-prefix repair validation.
 - [x] Signed anti-rollback snapshot manifests and verified local blob-manifest
-      storage/wire resolution (archive import and remote fetch remain gated).
+      storage/wire resolution (later milestones complete archive and fetch).
 - [x] Detailed health, authenticated Prometheus metrics, and bounded explicit
       public-address discovery.
 - [x] Internal authorizer/protocol threat review with unresolved release
@@ -219,6 +219,9 @@ Progress:
       signed-head-bound feed repair with losing-fork discard and state rebuild.
 - [x] Opt-in authenticated HTTPS blob serving/fetch with bounded exact-digest
       verification and immutable local read-through retention.
-- [ ] Recorded independent-custodian, snapshot-repair, and multi-host blob
-      drills, verified traversal, pilot runbooks, and
-      external assessment.
+- [x] External-vantage SSB address/key reachability proof, public-scope health
+      gating, combined operator doctor, sizing/alerting guidance, and complete
+      install/onboard/migrate/rotate/backup/upgrade/recovery/incident runbook.
+- [ ] Execute and record the independent-custodian, snapshot-repair, multi-host
+      blob, traversal, alert, and previous-version upgrade drills; commission
+      the independent external security assessment.

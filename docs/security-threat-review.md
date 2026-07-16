@@ -43,7 +43,7 @@ The principal boundaries are:
 | Plaintext daemon private keys | Reference-only v2 config/governance documents and Linux Secret Service migration | Other OS/hardware providers and independent recovery custody remain open |
 | Blob substitution or truncation | Per-chunk and total domain-separated digests, bounded authenticated HTTPS retrieval, verified read-through retention, content-addressed stores, outer digest/decryption/inner signature checks | No distributed reachability-aware garbage collection; blob mode remains explicit opt-in |
 | Snapshot rollback or foreign-state import | Fixed archive paths and hashes, authorized signature, group/manifest/no-rollback checks, staged production-adapter DB/log verification, fsynced atomic replacement and retained backup | Pilot restore/repair drill and platform filesystem qualification remain required |
-| RPC credential disclosure or unauthenticated remote bind | Remote bind requires bearer token; timing-safe comparison; metrics share authentication | Bearer tokens need deployment TLS/secret rotation outside this process |
+| RPC credential disclosure or unauthenticated remote bind | Remote bind requires bearer token; timing-safe comparison; metrics/blob routes share authentication | Bearer tokens need deployment TLS/secret rotation outside this process |
 | Dependency/build substitution | Pinned lockfile, native source checksum/patches, clean-worktree native archives, per-file verification, SBOM, subject hashes, package replacement drill, OIDC provenance attestations | A prior-release-to-candidate drill and publication ceremony require an actual earlier release |
 
 ## Findings and disposition
@@ -66,9 +66,11 @@ The principal boundaries are:
   complete prefix must end at the signed head and resolve the recorded fork,
   while the losing identity is persistently discarded during replay. A pilot
   must execute and independently review the forensic repair ceremony.
-- `SEC-005` — NAT discovery trusts an explicitly configured HTTPS service and
-  validates one SSB multiserver address. It does not create a port mapping or
-  prove reachability; operator/firewall verification remains required.
+- `SEC-005` — NAT discovery remains informational, but public deployments can
+  now require a configured external HTTPS service to perform an SSB connection
+  and return the exact observed server key; health degrades without the proof.
+  The service is a trusted external vantage and does not create firewall/router
+  mappings, so the pilot must qualify and monitor both mapping and verifier.
 - `SEC-006` — Release workflows now build self-verifying platform archives,
   attest the archive and evidence, and run a packaged persistent-data
   replacement drill. Before the first non-bootstrap upgrade, run the same tool

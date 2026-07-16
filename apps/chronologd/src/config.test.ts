@@ -81,6 +81,8 @@ describe('daemon configuration', () => {
       .toThrow('CHRONOLOG_NAT_DISCOVERY_URL_INVALID')
     expect(parseDaemonRuntimeConfig({ CHRONOLOG_NAT_DISCOVERY_URL: 'https://public.example/address' }))
       .toMatchObject({ natDiscoveryUrl: 'https://public.example/address' })
+    expect(parseDaemonRuntimeConfig({ CHRONOLOG_NAT_VERIFICATION_URL: 'https://probe.example/ssb' }))
+      .toMatchObject({ natVerificationUrl: 'https://probe.example/ssb' })
     expect(parseDaemonRuntimeConfig({
       CHRONOLOG_BLOB_MAX_INLINE_BYTES: '65536',
       CHRONOLOG_BLOB_PEERS: '[{"url":"https://peer.example","token":"secret"}]',

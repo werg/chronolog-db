@@ -113,6 +113,11 @@ Set `CHRONOLOG_PUBLIC_SSB_ADDRESS` for an operator-verified public multiserver
 address, or configure an HTTPS `CHRONOLOG_NAT_DISCOVERY_URL` that returns
 `{"address":"net:host:port~shs:key"}`. Discovery is bounded and non-fatal. It
 does not create a router mapping or prove inbound reachability.
+`CHRONOLOG_NAT_VERIFICATION_URL` adds an external-vantage SSB handshake proof:
+the service must return the exact address and observed server key. Public-scope
+health remains degraded until that proof succeeds. `chronolog doctor` combines
+health, write readiness, replication continuity, and governance availability
+for install/upgrade gates.
 
 Every consumed feed is checked by author, sequence, record ID, and previous
 link. A conflict is persisted to `feed-continuity.json`, makes the node
@@ -138,7 +143,8 @@ automatic distributed garbage collection remains intentionally absent.
   are implemented; the pilot ceremony remains required);
 - production drill evidence for trusted snapshot import/fork repair and
   multi-host large-payload retention/availability;
-- NAT discovery, sizing envelopes, alertable observability, and runbooks;
+- witnessed pilot execution of the sizing, alerting, traversal, recovery,
+  restore, repair, blob, and upgrade runbook;
 - resolution or explicit acceptance of every finding in the
   [internal threat review](security-threat-review.md);
 - an independent external security review of the release candidate.

@@ -4,6 +4,12 @@ export interface NatDiscoveryResult {
   readonly error?: string
 }
 
+export interface NatVerificationResult {
+  readonly status: 'not-configured' | 'verified' | 'failed'
+  readonly address: string | null
+  readonly error?: string
+}
+
 export async function discoverPublicSsbAddress(options: {
   readonly explicitAddress?: string
   readonly discoveryUrl?: string
@@ -46,6 +52,45 @@ export async function discoverPublicSsbAddress(options: {
   } finally {
     clearTimeout(timeout)
   }
+}
+
+export async function verifyPublicSsbReachability(options: {
+  readonly address: string | null
+  readonly verificationUrl?: string
+  readonly timeoutMs: number
+  readonly fetch?: typeof fetch
+}): Promise<NatVerificationResult> {
+  if (options.verificationUrl === undefined) return { status: 'not-configured', address: options.address }
+  if (options.address === null) return { status: 'failed', address: null, error: 'NAT_VERIFICATION_ADDRESS_UNAVAILABLE' }
+  const expectedKey = /~shs:([A-Za-z0-9+/=]+)$/u.exec(options.address)?.[1]
+  if (expectedKey === undefined) return { status: 'failed', address: options.address, error: 'NAT_VERIFICATION_ADDRESS_INVALID' }
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort('NAT verification timed out'), options.timeoutMs)
+  timeout.unref?.()
+  try {
+    const response = await (options.fetch ?? globalThis.fetch)(options.verificationUrl, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: { accept: 'application/json', 'content-type': 'application/json' },
+      body: JSON.stringify({ address: options.address }),
+    })
+    if (!response.ok) throw new Error(`HTTP_${response.status}`)
+    const declaredLength = Number(response.headers.get('content-length') ?? '0')
+    if (declaredLength > 16 * 1024) throw new Error('NAT_VERIFICATION_RESPONSE_LIMIT')
+    const text = await response.text()
+    if (Buffer.byteLength(text, 'utf8') > 16 * 1024) throw new Error('NAT_VERIFICATION_RESPONSE_LIMIT')
+    const value = JSON.parse(text) as unknown
+    if (typeof value !== 'object' || value === null || Array.isArray(value) ||
+        Object.keys(value).some((key) => !['address', 'reachable', 'observedServerKey'].includes(key)) ||
+        (value as { readonly address?: unknown }).address !== options.address ||
+        (value as { readonly reachable?: unknown }).reachable !== true ||
+        (value as { readonly observedServerKey?: unknown }).observedServerKey !== expectedKey) {
+      throw new Error('NAT_VERIFICATION_PROOF_INVALID')
+    }
+    return { status: 'verified', address: options.address }
+  } catch (error) {
+    return { status: 'failed', address: options.address, error: error instanceof Error ? error.message : String(error) }
+  } finally { clearTimeout(timeout) }
 }
 
 function validateAddress(address: string): string {

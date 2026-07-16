@@ -55,6 +55,7 @@ export interface DaemonRuntimeConfig {
   readonly heartbeatIntervalMs: number
   readonly publicSsbAddress?: string
   readonly natDiscoveryUrl?: string
+  readonly natVerificationUrl?: string
   readonly natDiscoveryTimeoutMs: number
   readonly blobMaxInlineBytes?: number
   readonly blobChunkBytes?: number
@@ -92,6 +93,9 @@ export function parseDaemonRuntimeConfig(environment: NodeJS.ProcessEnv): Daemon
     }),
     ...(environment.CHRONOLOG_NAT_DISCOVERY_URL === undefined ? {} : {
       natDiscoveryUrl: validUrl(environment.CHRONOLOG_NAT_DISCOVERY_URL, 'CHRONOLOG_NAT_DISCOVERY_URL'),
+    }),
+    ...(environment.CHRONOLOG_NAT_VERIFICATION_URL === undefined ? {} : {
+      natVerificationUrl: validUrl(environment.CHRONOLOG_NAT_VERIFICATION_URL, 'CHRONOLOG_NAT_VERIFICATION_URL'),
     }),
     natDiscoveryTimeoutMs: integer(environment.CHRONOLOG_NAT_DISCOVERY_TIMEOUT_MS ?? '3000', 1, 60_000, 'CHRONOLOG_NAT_DISCOVERY_TIMEOUT_MS'),
     ...(blobMaxInlineBytes === undefined ? {} : {

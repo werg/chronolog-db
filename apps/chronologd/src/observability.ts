@@ -10,9 +10,9 @@ export interface DaemonHealth {
   readonly lastError?: string
 }
 
-export function daemonHealth(status: NodeStatus, stopping = false): DaemonHealth {
+export function daemonHealth(status: NodeStatus, stopping = false, externalError?: string): DaemonHealth {
   const feedsWithGaps = status.transport.feedsWithGaps ?? 0
-  const degraded = status.lastError !== undefined || status.transport.lastCatchUpError !== undefined ||
+  const degraded = externalError !== undefined || status.lastError !== undefined || status.transport.lastCatchUpError !== undefined ||
     feedsWithGaps > 0 || status.quarantinedFeeds.length > 0
   const state = stopping
     ? 'stopping'
@@ -28,15 +28,15 @@ export function daemonHealth(status: NodeStatus, stopping = false): DaemonHealth
     orderLength: status.orderLength,
     materializationPending: status.materializationPending,
     feedsWithGaps,
-    ...(status.lastError === undefined && status.transport.lastCatchUpError === undefined ? {} : {
-      lastError: status.lastError ?? status.transport.lastCatchUpError,
+    ...(externalError === undefined && status.lastError === undefined && status.transport.lastCatchUpError === undefined ? {} : {
+      lastError: externalError ?? status.lastError ?? status.transport.lastCatchUpError,
     }),
   }
 }
 
-export function prometheusMetrics(status: NodeStatus): string {
+export function prometheusMetrics(status: NodeStatus, externalError?: string): string {
   const memory = process.memoryUsage()
-  const health = daemonHealth(status)
+  const health = daemonHealth(status, false, externalError)
   return `${[
     '# HELP chronolog_up Whether the daemon is operational.',
     '# TYPE chronolog_up gauge',

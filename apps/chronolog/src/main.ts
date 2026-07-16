@@ -54,8 +54,9 @@ if (command === undefined || command === 'help' || command === '--help') usage(c
 const defaults = await localDefaults()
 const groupId = process.env.CHRONOLOG_GROUP_ID ?? defaults.groupId
 if (groupId === undefined) throw new Error('Set CHRONOLOG_GROUP_ID or start chronologd with the default data directory')
+const baseUrl = process.env.CHRONOLOG_URL ?? 'http://127.0.0.1:8787'
 const transport = new HttpRpcTransport({
-  baseUrl: process.env.CHRONOLOG_URL ?? 'http://127.0.0.1:8787',
+  baseUrl,
   ...(process.env.CHRONOLOG_TOKEN === undefined ? {} : { token: process.env.CHRONOLOG_TOKEN }),
 })
 const client = new ChronologClient({
@@ -95,6 +96,27 @@ try {
     case 'evidence': output(await client.getSettlementEvidence(requiredArg(args.shift(), 'evidence TRANSACTION_ID'))); break
     case 'watermark': output(await client.validatorWatermark()); break
     case 'replication': output(await client.getReplicationStatus()); break
+    case 'doctor': {
+      const [healthResponse, status, replication] = await Promise.all([
+        fetch(`${baseUrl.replace(/\/$/u, '')}/health`),
+        client.getStatus(),
+        client.getReplicationStatus(),
+      ])
+      const health = await healthResponse.json() as { readonly ok?: unknown; readonly lastError?: unknown }
+      let governance: unknown
+      try { governance = await transport.unary('governance.getStatus', { groupId, requestId: randomUUID() }) }
+      catch (error) { governance = { unavailable: error instanceof Error ? error.message : String(error) } }
+      const checks = {
+        health: healthResponse.ok && health.ok === true,
+        nodeReady: status.state === 'ready' && status.writable,
+        replication: replication.feedsWithGaps === 0 && replication.quarantinedFeeds.length === 0 && replication.state !== 'degraded',
+        governance: typeof governance === 'object' && governance !== null && !('unavailable' in governance),
+      }
+      const ok = Object.values(checks).every(Boolean)
+      output({ ok, checks, status, replication, governance, health })
+      if (!ok) process.exitCode = 2
+      break
+    }
     case 'governance': {
       const operation = requiredArg(args.shift(), 'governance <status|grant|revoke|rotate|history|recover> ...')
       const base = { groupId, requestId: randomUUID() }
@@ -213,6 +235,6 @@ function jsonReplacer(_key: string, value: unknown): unknown {
   return value
 }
 function usage(code: number): never {
-  process.stderr.write('Usage: chronolog <status|query|transact|outcome|result|evidence|watermark|replication|governance|migrations|catalog> ...\n')
+  process.stderr.write('Usage: chronolog <status|doctor|query|transact|outcome|result|evidence|watermark|replication|governance|migrations|catalog> ...\n')
   process.exit(code)
 }

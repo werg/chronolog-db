@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
 
 import { ChronologClient, type ClientSqlBindings, type ClientSqlValue } from '@chronolog/client'
 import {
@@ -33,6 +34,18 @@ interface MigrationSpec {
   readonly statements: readonly SqlSpec[]
 }
 type JsonSqlValue = null | boolean | number | string | { readonly $int64: string } | { readonly $blob: string }
+interface CapabilitySpec {
+  readonly subjectId: string
+  readonly signingPublicKey: string
+  readonly transportAuthor?: string
+  readonly role: 'reader' | 'writer' | 'validator' | 'administrator' | 'schema-administrator'
+  readonly validUntilRevision?: string
+  readonly organization?: string
+  readonly validatorClass?: string
+  readonly minimumAuthorTimestampMs?: string
+  readonly readerScope?: 'snapshot' | 'audit'
+  readonly hpkePublicKey?: string
+}
 
 const args = process.argv.slice(2)
 const command = args.shift()
@@ -41,12 +54,13 @@ if (command === undefined || command === 'help' || command === '--help') usage(c
 const defaults = await localDefaults()
 const groupId = process.env.CHRONOLOG_GROUP_ID ?? defaults.groupId
 if (groupId === undefined) throw new Error('Set CHRONOLOG_GROUP_ID or start chronologd with the default data directory')
+const transport = new HttpRpcTransport({
+  baseUrl: process.env.CHRONOLOG_URL ?? 'http://127.0.0.1:8787',
+  ...(process.env.CHRONOLOG_TOKEN === undefined ? {} : { token: process.env.CHRONOLOG_TOKEN }),
+})
 const client = new ChronologClient({
   groupId,
-  transport: new HttpRpcTransport({
-    baseUrl: process.env.CHRONOLOG_URL ?? 'http://127.0.0.1:8787',
-    ...(process.env.CHRONOLOG_TOKEN === undefined ? {} : { token: process.env.CHRONOLOG_TOKEN }),
-  }),
+  transport,
 })
 
 try {
@@ -81,6 +95,29 @@ try {
     case 'evidence': output(await client.getSettlementEvidence(requiredArg(args.shift(), 'evidence TRANSACTION_ID'))); break
     case 'watermark': output(await client.validatorWatermark()); break
     case 'replication': output(await client.getReplicationStatus()); break
+    case 'governance': {
+      const operation = requiredArg(args.shift(), 'governance <status|grant|revoke|rotate|history|recover> ...')
+      const base = { groupId, requestId: randomUUID() }
+      if (operation === 'status') output(await transport.unary('governance.getStatus', base))
+      else if (operation === 'grant') {
+        const spec = JSON.parse(await inlineOrFile(requiredArg(args.shift(), 'governance grant SPEC_JSON_OR_@FILE'))) as CapabilitySpec
+        output(await transport.unary('governance.grantCapability', { ...base, ...spec }))
+      } else if (operation === 'revoke') {
+        if (args.length === 0) throw new Error('Usage: chronolog governance revoke CAPABILITY_ID [...]')
+        output(await transport.unary('governance.revokeCapabilities', { ...base, capabilityIds: args }))
+      } else if (operation === 'rotate') {
+        output(await transport.unary('governance.rotateEpoch', base))
+      } else if (operation === 'history') {
+        output(await transport.unary('governance.grantHistoricalAccess', {
+          ...base,
+          subjectId: requiredArg(args.shift(), 'governance history SUBJECT_ID'),
+        }))
+      } else if (operation === 'recover') {
+        const encoded = (await inlineOrFile(requiredArg(args.shift(), 'governance recover BASE64URL_OR_@FILE'))).trim()
+        output(await transport.unary('governance.publishRecovery', { ...base, canonicalRecoveryRecord: encoded }))
+      } else throw new Error(`Unknown governance operation: ${operation}`)
+      break
+    }
     case 'migrations': {
       const migrations = new MigrationManager(client)
       const operation = requiredArg(args.shift(), 'migrations <status|apply|wait> ...')
@@ -176,6 +213,6 @@ function jsonReplacer(_key: string, value: unknown): unknown {
   return value
 }
 function usage(code: number): never {
-  process.stderr.write('Usage: chronolog <status|query|transact|outcome|result|evidence|watermark|replication|migrations|catalog> ...\n')
+  process.stderr.write('Usage: chronolog <status|query|transact|outcome|result|evidence|watermark|replication|governance|migrations|catalog> ...\n')
   process.exit(code)
 }

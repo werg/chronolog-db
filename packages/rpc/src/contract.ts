@@ -12,6 +12,7 @@ import type {
   GetStatusRequest,
   GetTransactionResultRequest,
   GetTransactionResultResponse,
+  GetGovernanceStatusRequest,
   GetValidatorWatermarkRequest,
   LiveSqlEvent,
   LiveSqlRequest,
@@ -35,6 +36,17 @@ import type {
   ValidateDraftRequest,
   ValidateDraftResponse,
   ValidatorWatermark,
+  GovernanceStatus,
+  GrantCapabilityRequest,
+  GrantCapabilityResponse,
+  RevokeCapabilitiesRequest,
+  RevokeCapabilitiesResponse,
+  RotateEpochRequest,
+  RotateEpochResponse,
+  GrantHistoricalAccessRequest,
+  GrantHistoricalAccessResponse,
+  PublishRecoveryRequest,
+  PublishRecoveryResponse,
 } from './types.js'
 
 export interface RpcCallOptions { readonly signal?: AbortSignal; readonly token?: string; readonly timeoutMs?: number; readonly metadata?: Readonly<Record<string, string>> }
@@ -57,6 +69,12 @@ export interface UnaryRpcMethods {
   'evidence.getSettlement': { request: GetSettlementEvidenceRequest; response: SettlementEvidence }
   'evidence.getValidatorWatermark': { request: GetValidatorWatermarkRequest; response: ValidatorWatermark }
   'node.getReplicationStatus': { request: GetReplicationStatusRequest; response: ReplicationStatus }
+  'governance.getStatus': { request: GetGovernanceStatusRequest; response: GovernanceStatus }
+  'governance.grantCapability': { request: GrantCapabilityRequest; response: GrantCapabilityResponse }
+  'governance.revokeCapabilities': { request: RevokeCapabilitiesRequest; response: RevokeCapabilitiesResponse }
+  'governance.rotateEpoch': { request: RotateEpochRequest; response: RotateEpochResponse }
+  'governance.grantHistoricalAccess': { request: GrantHistoricalAccessRequest; response: GrantHistoricalAccessResponse }
+  'governance.publishRecovery': { request: PublishRecoveryRequest; response: PublishRecoveryResponse }
 }
 export interface StreamRpcMethods {
   'node.streamStatus': { request: StreamStatusRequest; response: NodeStatus }
@@ -99,5 +117,11 @@ export interface ChronologRpcService {
   getValidatorWatermark(request: GetValidatorWatermarkRequest, context: RpcCallContext): Promise<ValidatorWatermark>
   getReplicationStatus(request: GetReplicationStatusRequest, context: RpcCallContext): Promise<ReplicationStatus>
   streamReplicationStatus(request: StreamReplicationStatusRequest, context: RpcCallContext): AsyncIterable<ReplicationStatus>
+  getGovernanceStatus(request: GetGovernanceStatusRequest, context: RpcCallContext): Promise<GovernanceStatus>
+  grantCapability(request: GrantCapabilityRequest, context: RpcCallContext): Promise<GrantCapabilityResponse>
+  revokeCapabilities(request: RevokeCapabilitiesRequest, context: RpcCallContext): Promise<RevokeCapabilitiesResponse>
+  rotateEpoch(request: RotateEpochRequest, context: RpcCallContext): Promise<RotateEpochResponse>
+  grantHistoricalAccess(request: GrantHistoricalAccessRequest, context: RpcCallContext): Promise<GrantHistoricalAccessResponse>
+  publishRecovery(request: PublishRecoveryRequest, context: RpcCallContext): Promise<PublishRecoveryResponse>
 }
 export type ChronologService = ChronologRpcService

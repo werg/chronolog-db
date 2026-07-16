@@ -27,6 +27,7 @@ import { loadStaticMembership } from './static-membership.js'
 import { discoverPublicSsbAddress } from './nat-discovery.js'
 import { daemonHealth, prometheusMetrics } from './observability.js'
 import { daemonSecretStoreFromEnvironment } from './secret-store.js'
+import { createGovernanceRpcAdmin } from './governance-admin.js'
 
 const dataDirectory = resolve(process.env.CHRONOLOG_DATA_DIR ?? '.chronolog')
 const runtime = parseDaemonRuntimeConfig(process.env)
@@ -202,7 +203,12 @@ async function startRuntime() {
     })
     await node.start()
     server = new HttpRpcServer({
-      service: new NodeRpcService({ node }),
+      service: new NodeRpcService({
+        node,
+        ...(governance === undefined ? {} : {
+          governanceAdmin: createGovernanceRpcAdmin({ governance, rootPrivateKey: identity.privateKey }),
+        }),
+      }),
       host: runtime.host,
       port: runtime.port,
       ...(runtime.token === undefined ? {} : { token: runtime.token }),

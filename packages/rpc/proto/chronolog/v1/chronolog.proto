@@ -71,6 +71,47 @@ message SettlementEvidence { string transaction_id = 1; TransactionOutcome outco
 message ValidatorWatermark { string group_id = 1; uint64 revision = 2; bytes policy_id = 3; bytes membership_revision = 4; optional sint64 timestamp_ms = 5; repeated bytes supporting_validators = 6; repeated bytes blocked_by = 7; }
 message ReplicationStatus { string group_id = 1; uint64 revision = 2; uint32 connected_peers = 3; uint32 known_peers = 4; uint32 feeds_with_gaps = 5; uint32 pending_payloads = 6; uint32 ingestion_backlog = 7; bool materialization_pending = 8; string state = 9; }
 
+message GovernanceCapability {
+  bytes capability_id = 1;
+  bytes subject_id = 2;
+  bytes signing_public_key = 3;
+  optional string transport_author = 4;
+  string role = 5;
+  uint64 valid_from_revision = 6;
+  optional uint64 valid_until_revision = 7;
+  optional uint64 revoked_at_revision = 8;
+  bool active = 9;
+  optional string organization = 10;
+  optional string validator_class = 11;
+  optional string reader_scope = 12;
+  optional bytes hpke_public_key = 13;
+}
+message GovernanceStatus {
+  string group_id = 1;
+  uint64 revision = 2;
+  bytes revision_digest = 3;
+  bytes root_admin_public_key = 4;
+  string capability_log_feed = 5;
+  optional uint64 current_epoch = 6;
+  bool history_reopened = 7;
+  repeated GovernanceCapability capabilities = 8;
+}
+message GrantCapabilityRequest {
+  string group_id = 1; string request_id = 2; bytes subject_id = 3; bytes signing_public_key = 4;
+  optional string transport_author = 5; string role = 6; optional uint64 valid_until_revision = 7;
+  optional string organization = 8; optional string validator_class = 9;
+  optional sint64 minimum_author_timestamp_ms = 10; optional string reader_scope = 11;
+  optional bytes hpke_public_key = 12;
+}
+message GrantCapabilityResponse { uint64 revision = 1; bytes capability_id = 2; }
+message RevokeCapabilitiesRequest { string group_id = 1; string request_id = 2; repeated bytes capability_ids = 3; }
+message RevokeCapabilitiesResponse { uint64 revision = 1; repeated bytes revoked_capability_ids = 2; }
+message RotateEpochResponse { uint64 epoch = 1; }
+message GrantHistoricalAccessRequest { string group_id = 1; string request_id = 2; bytes subject_id = 3; }
+message GrantHistoricalAccessResponse { uint32 epoch_manifests_published = 1; }
+message PublishRecoveryRequest { string group_id = 1; string request_id = 2; bytes canonical_recovery_record = 3; }
+message PublishRecoveryResponse { bool published = 1; }
+
 service NodeService {
   rpc GetStatus(StatusRequest) returns (NodeStatus);
   rpc StreamStatus(StatusStreamRequest) returns (stream NodeStatus);
@@ -96,4 +137,12 @@ service EvidenceService {
   rpc GetSettlement(TransactionRequest) returns (SettlementEvidence);
   rpc StreamSettlement(TransactionRequest) returns (stream SettlementEvidence);
   rpc GetValidatorWatermark(StatusRequest) returns (ValidatorWatermark);
+}
+service GovernanceService {
+  rpc GetStatus(StatusRequest) returns (GovernanceStatus);
+  rpc GrantCapability(GrantCapabilityRequest) returns (GrantCapabilityResponse);
+  rpc RevokeCapabilities(RevokeCapabilitiesRequest) returns (RevokeCapabilitiesResponse);
+  rpc RotateEpoch(StatusRequest) returns (RotateEpochResponse);
+  rpc GrantHistoricalAccess(GrantHistoricalAccessRequest) returns (GrantHistoricalAccessResponse);
+  rpc PublishRecovery(PublishRecoveryRequest) returns (PublishRecoveryResponse);
 }

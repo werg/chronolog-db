@@ -34,6 +34,12 @@ const unaryDispatch: Record<UnaryRpcMethod, keyof ChronologRpcService> = {
   'evidence.getSettlement': 'getSettlementEvidence',
   'evidence.getValidatorWatermark': 'getValidatorWatermark',
   'node.getReplicationStatus': 'getReplicationStatus',
+  'governance.getStatus': 'getGovernanceStatus',
+  'governance.grantCapability': 'grantCapability',
+  'governance.revokeCapabilities': 'revokeCapabilities',
+  'governance.rotateEpoch': 'rotateEpoch',
+  'governance.grantHistoricalAccess': 'grantHistoricalAccess',
+  'governance.publishRecovery': 'publishRecovery',
 }
 
 const streamDispatch: Record<StreamRpcMethod, keyof ChronologRpcService> = {

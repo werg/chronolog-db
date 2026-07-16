@@ -6,7 +6,30 @@ import type {
   TransactionResultEnvelopeV1,
 } from '@chronolog/protocol'
 
-import type { LocalSqlValue } from './types.js'
+import type {
+  GetGovernanceStatusRequest,
+  GovernanceStatus,
+  GrantCapabilityRequest,
+  GrantCapabilityResponse,
+  GrantHistoricalAccessRequest,
+  GrantHistoricalAccessResponse,
+  LocalSqlValue,
+  PublishRecoveryRequest,
+  PublishRecoveryResponse,
+  RevokeCapabilitiesRequest,
+  RevokeCapabilitiesResponse,
+  RotateEpochRequest,
+  RotateEpochResponse,
+} from './types.js'
+
+export interface GovernanceRpcAdmin {
+  getStatus(request: GetGovernanceStatusRequest): Promise<GovernanceStatus>
+  grantCapability(request: GrantCapabilityRequest): Promise<GrantCapabilityResponse>
+  revokeCapabilities(request: RevokeCapabilitiesRequest): Promise<RevokeCapabilitiesResponse>
+  rotateEpoch(request: RotateEpochRequest): Promise<RotateEpochResponse>
+  grantHistoricalAccess(request: GrantHistoricalAccessRequest): Promise<GrantHistoricalAccessResponse>
+  publishRecovery(request: PublishRecoveryRequest): Promise<PublishRecoveryResponse>
+}
 
 export interface SqlObservationExecution {
   readonly revision: bigint

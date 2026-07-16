@@ -220,10 +220,10 @@ transport traffic.
 
 The static file is an out-of-band bootstrap snapshot, not replicated consensus
 state and not a live administration interface. In the default profile,
-`GovernanceControlPlane` is the programmatic administration surface for live
-grants, revocation, epoch rotation, audit-history rewrapping, and threshold
-recovery. A hardened operator CLI and separation of recovery/private device
-keys from the daemon store remain release work.
+`chronolog governance` provides status, live grants/revocations, epoch
+rotation, audit-history rewrapping, and relay of an offline-signed threshold
+recovery record. Independent recovery custody and the packaged offline signing
+ceremony remain release work.
 
 ## Workspace
 

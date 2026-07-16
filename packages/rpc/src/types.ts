@@ -283,3 +283,60 @@ export type ReplicationState = 'offline' | 'connecting' | 'syncing' | 'current' 
 export interface ReplicationStatus { readonly groupId: GroupId; readonly revision: Revision; readonly connectedPeers: number; readonly knownPeers: number; readonly feedsWithGaps: number; readonly quarantinedFeeds: readonly string[]; readonly pendingPayloads: number; readonly ingestionBacklog: number; readonly materializationPending: boolean; readonly state: ReplicationState }
 export interface GetReplicationStatusRequest { readonly groupId: GroupId; readonly requestId: RequestId }
 export interface StreamReplicationStatusRequest extends GetReplicationStatusRequest { readonly resumeAfterEventSetRevision?: Revision }
+
+export type GovernanceCapabilityRole =
+  | 'reader'
+  | 'writer'
+  | 'validator'
+  | 'administrator'
+  | 'schema-administrator'
+
+export interface GovernanceCapabilityStatus {
+  readonly capabilityId: string
+  readonly subjectId: string
+  readonly signingPublicKey: string
+  readonly transportAuthor?: string
+  readonly role: GovernanceCapabilityRole
+  readonly validFromRevision: string
+  readonly validUntilRevision?: string
+  readonly revokedAtRevision?: string
+  readonly active: boolean
+  readonly organization?: string
+  readonly validatorClass?: string
+  readonly readerScope?: 'snapshot' | 'audit'
+  readonly hpkePublicKey?: string
+}
+
+export interface GetGovernanceStatusRequest { readonly groupId: GroupId; readonly requestId: RequestId }
+export interface GovernanceStatus {
+  readonly groupId: GroupId
+  readonly revision: string
+  readonly revisionDigest: string
+  readonly rootAdminPublicKey: string
+  readonly capabilityLogFeed: string
+  readonly currentEpoch: string | null
+  readonly historyReopened: boolean
+  readonly capabilities: readonly GovernanceCapabilityStatus[]
+}
+
+export interface GrantCapabilityRequest extends GetGovernanceStatusRequest {
+  readonly subjectId: string
+  readonly signingPublicKey: string
+  readonly transportAuthor?: string
+  readonly role: GovernanceCapabilityRole
+  readonly validUntilRevision?: string
+  readonly organization?: string
+  readonly validatorClass?: string
+  readonly minimumAuthorTimestampMs?: string
+  readonly readerScope?: 'snapshot' | 'audit'
+  readonly hpkePublicKey?: string
+}
+export interface GrantCapabilityResponse { readonly revision: string; readonly capabilityId: string }
+export interface RevokeCapabilitiesRequest extends GetGovernanceStatusRequest { readonly capabilityIds: readonly string[] }
+export interface RevokeCapabilitiesResponse { readonly revision: string; readonly revokedCapabilityIds: readonly string[] }
+export type RotateEpochRequest = GetGovernanceStatusRequest
+export interface RotateEpochResponse { readonly epoch: string }
+export interface GrantHistoricalAccessRequest extends GetGovernanceStatusRequest { readonly subjectId: string }
+export interface GrantHistoricalAccessResponse { readonly epochManifestsPublished: number }
+export interface PublishRecoveryRequest extends GetGovernanceStatusRequest { readonly canonicalRecoveryRecord: string }
+export interface PublishRecoveryResponse { readonly published: true }

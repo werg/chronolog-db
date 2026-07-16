@@ -29,12 +29,18 @@ import type {
   CancelDraftResponse,
   DraftMutationResponse,
   GetOutcomeRequest,
+  GetGovernanceStatusRequest,
   GetReplicationStatusRequest,
   GetSettlementEvidenceRequest,
   GetStatusRequest,
   GetTransactionResultRequest,
   GetTransactionResultResponse,
   GetValidatorWatermarkRequest,
+  GovernanceStatus,
+  GrantCapabilityRequest,
+  GrantCapabilityResponse,
+  GrantHistoricalAccessRequest,
+  GrantHistoricalAccessResponse,
   LiveSqlEvent,
   LiveSqlRequest,
   LocalSqlRequest,
@@ -45,11 +51,15 @@ import type {
   ObserveSqlResponse,
   PublishDraftRequest,
   PublishDraftResponse,
+  PublishRecoveryRequest,
+  PublishRecoveryResponse,
   RebaseDraftRequest,
   RebaseDraftResponse,
   RefreshedObservation,
   RejectionAttribution,
   ReplaceStatementsRequest,
+  RevokeCapabilitiesRequest,
+  RevokeCapabilitiesResponse,
   ReplicationStatus,
   RevisionMetadata,
   RpcSqlStatement,
@@ -59,6 +69,8 @@ import type {
   StreamReplicationStatusRequest,
   StreamSettlementEvidenceRequest,
   StreamStatusRequest,
+  RotateEpochRequest,
+  RotateEpochResponse,
   TransactionOutcome,
   ValidateDraftRequest,
   ValidateDraftResponse,
@@ -67,6 +79,7 @@ import type {
 import { RPC_API_VERSION } from './types.js'
 import type {
   ChronologRpcNodeService,
+  GovernanceRpcAdmin,
   RpcMaterializedOutcome,
   SqlObservationExecution,
 } from './service-contract.js'
@@ -122,6 +135,7 @@ interface IdempotentEntry {
 
 export interface NodeRpcServiceOptions {
   readonly node: ChronologRpcNodeService
+  readonly governanceAdmin?: GovernanceRpcAdmin
   readonly draftTtlMs?: number
   readonly maxDraftTtlMs?: number
   readonly maxDrafts?: number
@@ -139,6 +153,7 @@ export interface NodeRpcServiceOptions {
 /** SQL-first RPC facade. Draft state is advisory; only the published SQL program is signed. */
 export class NodeRpcService implements ChronologRpcService {
   readonly #node: ChronologRpcNodeService
+  readonly #governanceAdmin: GovernanceRpcAdmin | undefined
   readonly #draftTtlMs: number
   readonly #maxDraftTtlMs: number
   readonly #maxDrafts: number
@@ -157,6 +172,7 @@ export class NodeRpcService implements ChronologRpcService {
 
   constructor(options: NodeRpcServiceOptions) {
     this.#node = options.node
+    this.#governanceAdmin = options.governanceAdmin
     this.#draftTtlMs = positive(options.draftTtlMs ?? 5 * 60_000, 'draftTtlMs')
     this.#maxDraftTtlMs = positive(options.maxDraftTtlMs ?? 60 * 60_000, 'maxDraftTtlMs')
     this.#maxDrafts = positive(options.maxDrafts ?? 1_024, 'maxDrafts')
@@ -187,6 +203,36 @@ export class NodeRpcService implements ChronologRpcService {
       validating: status.validating,
       ...(status.lastError === undefined ? {} : { lastErrorCode: status.lastError }),
     }
+  }
+
+  async getGovernanceStatus(request: GetGovernanceStatusRequest, _context: RpcCallContext): Promise<GovernanceStatus> {
+    this.#assertGroup(request.groupId)
+    return this.#admin().getStatus(request)
+  }
+
+  async grantCapability(request: GrantCapabilityRequest, _context: RpcCallContext): Promise<GrantCapabilityResponse> {
+    this.#assertGroup(request.groupId)
+    return this.#admin().grantCapability(request)
+  }
+
+  async revokeCapabilities(request: RevokeCapabilitiesRequest, _context: RpcCallContext): Promise<RevokeCapabilitiesResponse> {
+    this.#assertGroup(request.groupId)
+    return this.#admin().revokeCapabilities(request)
+  }
+
+  async rotateEpoch(request: RotateEpochRequest, _context: RpcCallContext): Promise<RotateEpochResponse> {
+    this.#assertGroup(request.groupId)
+    return this.#admin().rotateEpoch(request)
+  }
+
+  async grantHistoricalAccess(request: GrantHistoricalAccessRequest, _context: RpcCallContext): Promise<GrantHistoricalAccessResponse> {
+    this.#assertGroup(request.groupId)
+    return this.#admin().grantHistoricalAccess(request)
+  }
+
+  async publishRecovery(request: PublishRecoveryRequest, _context: RpcCallContext): Promise<PublishRecoveryResponse> {
+    this.#assertGroup(request.groupId)
+    return this.#admin().publishRecovery(request)
   }
 
   async *streamStatus(request: StreamStatusRequest, context: RpcCallContext): AsyncIterable<NodeStatus> {
@@ -828,6 +874,13 @@ export class NodeRpcService implements ChronologRpcService {
 
   #assertExecutionRevision(execution: SqlObservationExecution, requested: bigint): void {
     if (execution.revision !== requested) throw revisionUnavailable('SQL observation did not use the pinned revision')
+  }
+
+  #admin(): GovernanceRpcAdmin {
+    if (this.#governanceAdmin === undefined) {
+      throw failed('Replicated governance is not enabled for this node')
+    }
+    return this.#governanceAdmin
   }
 
   #assertGroup(groupId: string): void {

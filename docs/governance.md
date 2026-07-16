@@ -37,8 +37,41 @@ gate.
 
 ## Live operations
 
-`GovernanceControlPlane` in `@chronolog/node-core` is the current programmatic
-administration surface:
+The daemon exposes the control plane through authenticated `governance.*` RPC
+methods and the `chronolog governance` CLI. Remote administration uses the
+same required bearer token as every other remote RPC; a static-membership node
+fails these commands with `failed_precondition`.
+
+```sh
+pnpm cli governance status
+pnpm cli governance grant @reader-grant.json
+pnpm cli governance revoke CAPABILITY_ID
+pnpm cli governance rotate
+pnpm cli governance history SUBJECT_ID
+pnpm cli governance recover @signed-recovery-record.base64url
+```
+
+A grant file contains public material only. For example:
+
+```json
+{
+  "subjectId": "BASE64URL_SUBJECT_ID",
+  "signingPublicKey": "BASE64URL_ED25519_PUBLIC_KEY",
+  "transportAuthor": "@participant-feed.ed25519",
+  "role": "reader",
+  "readerScope": "snapshot",
+  "hpkePublicKey": "BASE64URL_X25519_PUBLIC_KEY"
+}
+```
+
+Reader grants require a scope and HPKE public key. Validator grants default
+their minimum author timestamp to the daemon's current time unless an explicit
+unsigned decimal value is supplied. Epoch keys are generated inside the
+daemon and never returned by RPC. Recovery accepts only a canonical, already
+threshold-signed record for the same group, so custodians can authorize it
+offline and an untrusted participant can relay it.
+
+`GovernanceControlPlane` in `@chronolog/node-core` backs that surface:
 
 - `publishCapabilityChange` atomically grants roles, revokes capability IDs,
   installs validation policies, or transfers the root/feed;

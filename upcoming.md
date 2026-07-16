@@ -208,6 +208,8 @@ Progress:
       public-address discovery.
 - [x] Internal authorizer/protocol threat review with unresolved release
       findings recorded.
+- [x] Authenticated governance status/grant/revoke/epoch/history/recovery RPC
+      and CLI workflows that keep content keys inside the daemon.
 - [ ] Installable packaging/upgrades, independent key custody, snapshot-backed
       repair/import, remote blob fetch, verified traversal, pilot runbooks, and
       external assessment.

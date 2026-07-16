@@ -19,6 +19,15 @@ export interface CoreExecutionManifestOptions {
   readonly features?: Partial<ExecutionManifest['features']>
 }
 
+export const CORE_EXECUTION_FEATURES: Readonly<ExecutionManifest['features']> = Object.freeze({
+  decimal: true,
+  json: true,
+  vector: true,
+  fts: false,
+  spatial: false,
+  wasm: false,
+})
+
 export const CORE_SQL_ERROR_CODES = [
   'EXECUTION_MANIFEST_DIGEST_MISMATCH',
   'SQL_ASSERTION_FALSE',
@@ -75,6 +84,11 @@ export function createCoreExecutionManifest(
   options: CoreExecutionManifestOptions,
 ): ExecutionManifest {
   assertDigest(options.engineDigest, 'EXECUTION_ENGINE_DIGEST_INVALID')
+  for (const [name, enabled] of Object.entries(options.features ?? {})) {
+    if (enabled !== CORE_EXECUTION_FEATURES[name as keyof ExecutionManifest['features']]) {
+      throw new SqlCompilerError('EXECUTION_FEATURE_UNAVAILABLE')
+    }
+  }
   return {
     version: 1,
     profile: options.profile,
@@ -83,15 +97,7 @@ export function createCoreExecutionManifest(
     functions: [],
     collations: [],
     modules: [],
-    features: {
-      decimal: true,
-      json: true,
-      vector: true,
-      fts: false,
-      spatial: false,
-      wasm: false,
-      ...options.features,
-    },
+    features: { ...CORE_EXECUTION_FEATURES },
     resources: {
       maxProgramNodes: 10_000,
       maxExpressionDepth: 64,

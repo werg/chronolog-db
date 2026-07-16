@@ -212,6 +212,55 @@ describe('SQL-first DoltLite materialization', () => {
     materializer.close()
   })
 
+  it('replays pinned JSON arrows and deterministic trigger RAISE actions', async () => {
+    const { path, manifest } = await fixture()
+    let materializer = await DeterministicMaterializer.open({ path, executionManifest: manifest, checkpointEvery: 1 })
+    const setup = await transaction(1n, 'json-raise-setup', {
+      version: 1,
+      preconditions: [truePrecondition()],
+      body: [
+        statement('CREATE TABLE guarded_json (id INTEGER PRIMARY KEY, payload TEXT NOT NULL) STRICT'),
+        statement("CREATE TRIGGER guarded_json_ignore BEFORE INSERT ON guarded_json WHEN NEW.id = 0 BEGIN SELECT RAISE(IGNORE); END"),
+        statement("CREATE TRIGGER guarded_json_abort BEFORE INSERT ON guarded_json WHEN NEW.id < 0 BEGIN SELECT RAISE(ABORT, 'negative id'); END"),
+        statement("INSERT INTO guarded_json VALUES (0, '{\"ignored\":true}') RETURNING id"),
+        statement("INSERT INTO guarded_json VALUES (1, '{\"answer\":42}')"),
+        statement("SELECT payload -> '$.answer' AS json_value, payload ->> '$.answer' AS sql_value FROM guarded_json"),
+      ],
+    }, materializer.executionManifestDigest)
+    await materializer.materialize([setup])
+    expect(materializer.outcome(setup.txId)?.outcome).toBe('accepted')
+    expect(materializer.transactionResult(setup.txId)?.statements[3]).toMatchObject({
+      affectedRows: 0n,
+      result: { rows: [] },
+    })
+    expect(materializer.transactionResult(setup.txId)?.statements[5]?.result?.rows).toEqual([[
+      { kind: 'text', utf8: utf8('42') },
+      { kind: 'integer', value: 42n },
+    ]])
+
+    const rejected = await transaction(2n, 'json-raise-rejected', {
+      version: 1,
+      preconditions: [truePrecondition()],
+      body: [statement("INSERT INTO guarded_json VALUES (-1, '{\"bad\":true}')")],
+    }, materializer.executionManifestDigest)
+    await materializer.materialize([setup, rejected])
+    expect(materializer.outcome(rejected.txId)).toMatchObject({
+      outcome: 'rejected_execution',
+      rejectionCode: 'SQL_CONSTRAINT_VIOLATION',
+      failingStatementIndex: 0,
+    })
+    expect(materializer.localSql('SELECT id FROM guarded_json').rows).toEqual([[
+      { kind: 'integer', value: '1' },
+    ]])
+    const envelope = materializer.transactionResult(setup.txId)
+    materializer.close()
+
+    materializer = await DeterministicMaterializer.open({ path, executionManifest: manifest, checkpointEvery: 1 })
+    expect(materializer.transactionResult(setup.txId)).toEqual(envelope)
+    expect(materializer.outcome(rejected.txId)?.rejectionCode).toBe('SQL_CONSTRAINT_VIOLATION')
+    materializer.close()
+  })
+
   it('rolls back schema and data on deterministic rejection and replays late predecessors', async () => {
     const { path, manifest } = await fixture()
     const materializer = await DeterministicMaterializer.open({ path, executionManifest: manifest, checkpointEvery: 1 })

@@ -76,7 +76,6 @@ export async function generateConformanceReport(options: ReportOptions = {}): Pr
     profile: 'chronolog-portable-core-conformance-v1',
     engine: native.descriptor,
     engineDigest: native.digest,
-    features: { decimal: false, json: false, vector: false, fts: false, spatial: false, wasm: false },
   })
   const manifestArtifacts = await compileManifestArtifacts(manifest)
   const replay = await runReplayFixture(manifest)
@@ -88,10 +87,16 @@ export async function generateConformanceReport(options: ReportOptions = {}): Pr
     'sql-core-v1',
     'sql-ordered-mutations-v1',
     'sql-transaction-results-v1',
+    'sql-json1-arrows-v1',
+    'sql-trigger-raise-v1',
   ] as const
   const featureEvidence = Object.fromEntries(enabledFeatures.map((feature) => [
     feature,
-    feature === 'sql-core-v1' ? ['sqlite-ledger-v1', 'native-replay-v1'] : ['native-replay-v1'],
+    feature === 'sql-core-v1'
+      ? ['sqlite-ledger-v1', 'native-replay-v1']
+      : feature === 'sql-json1-arrows-v1' || feature === 'sql-trigger-raise-v1'
+        ? ['sqlite-ledger-v1']
+        : ['native-replay-v1'],
   ]))
   const deterministicWithoutDigest = {
     executionManifestDigest: hex(manifestArtifacts.executionManifestDigest),

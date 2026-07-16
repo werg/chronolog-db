@@ -90,15 +90,15 @@
     "aggregateMinMax": { "status": "determinized", "reason": "canonical_lowering", "current": "MIN/MAX are admitted only for representative-stable arguments; the initial proof admits typeof(...). Dynamic numeric/collation ties and adjacent bare-column representatives remain gated." },
     "otherAggregates": { "status": "determinized", "reason": "canonical_lowering", "current": "count and value-completed ordered group_concat are admitted. Floating accumulation and aggregates without a proven input order remain gated." },
     "jsonScalarFunctions": { "status": "profile_pinned", "reason": "profile_identity", "current": "Only functions present in the closed deterministic function registry are admitted." },
-    "jsonArrowOperators": { "status": "temporarily_gated", "reason": "determinism_conformance", "compilerError": "SQL_JSON_OPERATOR_TEMPORARILY_GATED" },
+    "jsonArrowOperators": { "status": "profile_pinned", "reason": "profile_identity", "current": "JSON -> and ->> use the statically linked JSON1 implementation committed by the native engine digest and remain subject to ordinary VM/result/value limits." },
     "matchAndRegexp": { "status": "temporarily_gated", "reason": "registered_extension", "compilerError": "SQL_REGISTERED_OPERATOR_REQUIRED" },
-    "raiseExpression": { "status": "temporarily_gated", "reason": "determinism_conformance", "compilerError": "SQL_RAISE_TEMPORARILY_GATED" },
+    "raiseExpression": { "status": "determinized", "reason": "canonical_lowering", "current": "Trigger RAISE(ABORT), RAISE(FAIL), and RAISE(IGNORE) are admitted with candidate rollback and stable attribution. RAISE(ROLLBACK) remains gated because it controls the enclosing transaction." },
     "tableValuedFunctions": { "status": "temporarily_gated", "reason": "registered_extension", "current": "Only the approved pragma table functions are admitted.", "compilerError": "SQL_TABLE_FUNCTION_NOT_REGISTERED" },
     "temporaryObjects": { "status": "prohibited", "reason": "physical_storage", "compilerError": "SQL_TEMP_OBJECT_PROHIBITED" },
     "attachedDatabaseNames": { "status": "prohibited", "reason": "physical_storage", "compilerError": "SQL_ATTACHED_DATABASE_PROHIBITED" }
   },
   "functions": {
-    "closedAllowlist": { "status": "profile_pinned", "reason": "profile_identity", "source": "packages/compiler-sqlite/src/deterministic-functions.ts#DETERMINISTIC_SQLITE_COMPILER_FUNCTIONS" },
+    "closedAllowlist": { "status": "profile_pinned", "reason": "profile_identity", "source": "packages/compiler-sqlite/src/deterministic-functions.ts#DETERMINISTIC_SQLITE_COMPILER_FUNCTIONS", "current": "The core manifest exposes only engine-pinned built-ins and BINARY/NOCASE/RTRIM collations. Unknown functions and collations fail during compilation; the core manifest has empty external function/collation/module registries." },
     "explicitArgumentTimeFunctions": { "status": "profile_pinned", "reason": "profile_identity", "names": ["date", "time", "datetime", "julianday", "strftime", "unixepoch", "timediff"], "current": "Arguments must be literal and may not be now/localtime/utc/subsec/subsecond; zero-argument and data-dependent calls are rejected." },
     "currentTimeLiterals": { "status": "temporarily_gated", "reason": "ambient_state", "compilerError": "SQL_SIGNED_TIME_TEMPORARILY_GATED" },
     "randomAndRandomblob": { "status": "temporarily_gated", "reason": "ambient_state", "compilerError": "SQL_FUNCTION_TEMPORARILY_GATED" },
@@ -146,7 +146,6 @@
   },
   "knownTemporaryDebt": [
     "Exact SQLite 3.54 parser grammar remains unavailable; the pinned 3.53/3.54 compatibility boundary is measured by pnpm conformance:sqlite",
-    "Registered deterministic functions, collations, and virtual-table modules",
     "ANALYZE and REINDEX replay conformance"
   ]
 }

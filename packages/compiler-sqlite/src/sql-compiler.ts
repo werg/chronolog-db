@@ -329,16 +329,13 @@ function validateDeterministicExpressions(ast: Stmt, sql: string): void {
     nodes: {
       FunctionCallExpr(node) { validateFunction(node, sql) },
       FunctionCallStarExpr(node) { validateStarFunction(node, sql) },
-      BinaryExpr(node) {
-        if (node.op === 'ArrowRight' || node.op === 'ArrowRightShift') {
-          throw compilerError('SQL_JSON_OPERATOR_TEMPORARILY_GATED', sql, node)
-        }
-      },
       LikeExpr(node) {
         if (node.op === 'Match' || node.op === 'Regexp') {
           throw compilerError('SQL_REGISTERED_OPERATOR_REQUIRED', sql, node)
         }
       },
+      CollateExpr(node) { validateBuiltinCollation(node.collation, sql, node) },
+      CollateColumnConstraint(node) { validateBuiltinCollation(node.collationName.text, sql, node) },
       Select(node) {
         const topLevelResult = ast.type === 'SelectStmt' && node === ast.body
         if (node.limit !== undefined && !isProvablyAtMostOneRow(node) && (!topLevelResult || node.orderBy === undefined)) {
@@ -368,9 +365,17 @@ function validateDeterministicExpressions(ast: Stmt, sql: string): void {
           throw compilerError('SQL_TABLE_FUNCTION_NOT_REGISTERED', sql, node)
         }
       },
-      RaiseExpr(node) { throw compilerError('SQL_RAISE_TEMPORARILY_GATED', sql, node) },
+      RaiseExpr(node) {
+        if (node.resolve === 'Rollback') throw compilerError('SQL_RAISE_TEMPORARILY_GATED', sql, node)
+      },
     },
   })
+}
+
+function validateBuiltinCollation(name: string, sql: string, node: AstNode): void {
+  if (!['binary', 'nocase', 'rtrim'].includes(asciiLower(name))) {
+    throw compilerError('SQL_COLLATION_NOT_REGISTERED', sql, node)
+  }
 }
 
 function validateFunction(node: FunctionCallExpr, sql: string): void {

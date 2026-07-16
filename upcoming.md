@@ -135,7 +135,7 @@ Acceptance:
 
 ## Project 8 — Registered extensions and advanced indexes
 
-Status: in progress
+Status: complete
 
 - Complete registered deterministic functions and collations.
 - Gate virtual tables and table-valued functions behind immutable identities
@@ -147,13 +147,13 @@ Status: in progress
 
 Acceptance:
 
-- [ ] Every enabled extension has a pinned implementation digest, reference
+- [x] Every enabled extension has a pinned implementation digest, reference
       behavior, resource limits, and cross-platform replay evidence.
-- [ ] Unavailable modules fail before validation or execution.
+- [x] Unavailable modules fail before validation or execution.
 
 ## Project 9 — Production workerd/CAS execution path
 
-Status: pending
+Status: in progress
 
 - Decide and record whether the first deployment target is pure workerd or the
   native daemon.

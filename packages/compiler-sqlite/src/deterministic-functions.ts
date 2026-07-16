@@ -81,6 +81,7 @@ export const DETERMINISTIC_SQLITE_COMPILER_FUNCTIONS: ReadonlySet<string> = new 
   ...DETERMINISTIC_SQLITE_SCALAR_FUNCTIONS,
   ...DETERMINISTIC_SQLITE_BUILTIN_FUNCTIONS,
   '->',
+  '->>',
   'count',
   'min',
   'max',

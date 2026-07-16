@@ -7,8 +7,19 @@ import {
   orderedSqlBindingValues,
   type SqlCompilerError,
 } from './sql-compiler.js'
+import { createCoreExecutionManifest } from './manifest.js'
 
 describe('deterministic SQL compiler', () => {
+  it('does not let the core manifest advertise unavailable extension profiles', () => {
+    const engineDigest = new Uint8Array(32)
+    expect(createCoreExecutionManifest({ profile: 'test', engineDigest }).features).toEqual({
+      decimal: true, json: true, vector: true, fts: false, spatial: false, wasm: false,
+    })
+    expect(() => createCoreExecutionManifest({
+      profile: 'test', engineDigest, features: { fts: true },
+    })).toThrowError(expect.objectContaining({ code: 'EXECUTION_FEATURE_UNAVAILABLE' }))
+  })
+
   it('preserves exact source and SQLite parameter numbering', () => {
     const source = {
       sql: 'UPDATE accounts SET value = ?2 WHERE id = :id AND shard = ?',
@@ -131,7 +142,6 @@ describe('deterministic SQL compiler', () => {
     ["SELECT datetime(?)", 'SQL_AMBIENT_TIME_PROHIBITED'],
     ['SELECT (SELECT id FROM accounts)', 'SQL_SCALAR_SUBQUERY_TEMPORARILY_GATED'],
     ['SELECT id FROM accounts LIMIT 1', 'SQL_UNORDERED_LIMIT_TEMPORARILY_GATED'],
-    ["SELECT '{}' ->> '$.id'", 'SQL_JSON_OPERATOR_TEMPORARILY_GATED'],
     ['INSERT INTO accounts SELECT * FROM archived_accounts', 'SQL_INSERT_SELECT_TEMPORARILY_GATED'],
     ['UPDATE accounts SET value = source.value FROM source WHERE source.id = accounts.id', 'SQL_ORDER_SENSITIVE_UPDATE_TEMPORARILY_GATED'],
     ['CREATE TABLE copied AS SELECT id FROM accounts', 'SQL_CREATE_TABLE_AS_SELECT_TEMPORARILY_GATED'],
@@ -142,6 +152,9 @@ describe('deterministic SQL compiler', () => {
     ['SELECT value FROM accounts UNION SELECT value FROM archived_accounts', 'SQL_CANONICAL_REPRESENTATIVE_TEMPORARILY_GATED'],
     ['SELECT row_number() OVER (ORDER BY value), value FROM accounts', 'SQL_WINDOW_TEMPORARILY_GATED'],
     ['SELECT group_concat(value ORDER BY id) FROM accounts', 'SQL_FUNCTION_TEMPORARILY_GATED'],
+    ['SELECT value COLLATE application_custom FROM accounts', 'SQL_COLLATION_NOT_REGISTERED'],
+    ['CREATE TABLE custom_collation (value TEXT COLLATE application_custom)', 'SQL_COLLATION_NOT_REGISTERED'],
+    ['CREATE VIRTUAL TABLE search_docs USING fts5(body)', 'SQL_VIRTUAL_TABLE_TEMPORARILY_GATED'],
     ['CREATE TEMP TABLE x (id)', 'SQL_TEMP_OBJECT_PROHIBITED'],
     ['DROP TABLE chronolog_transactions', 'SQL_PROTECTED_OBJECT_NAME'],
     ['SELECT * FROM dolt_log', 'SQL_PROTECTED_OBJECT_READ'],
@@ -154,9 +167,17 @@ describe('deterministic SQL compiler', () => {
     )
   })
 
-  it('parses nested trigger programs and rejects gated RAISE behavior', () => {
-    expect(() => compileSqlStatement({
+  it('admits deterministic JSON arrows and trigger RAISE while gating transaction rollback', () => {
+    expect(compileSqlStatement({
+      sql: "SELECT json('{\"id\":1}') ->> '$.id'",
+      bindings: [],
+    }, 'body').statementClass).toBe('read')
+    expect(compileSqlStatement({
       sql: 'CREATE TRIGGER check_value BEFORE INSERT ON accounts BEGIN SELECT RAISE(ABORT, \'bad\'); END',
+      bindings: [],
+    }, 'body').statementClass).toBe('schema')
+    expect(() => compileSqlStatement({
+      sql: 'CREATE TRIGGER rollback_value BEFORE INSERT ON accounts BEGIN SELECT RAISE(ROLLBACK, \'bad\'); END',
       bindings: [],
     }, 'body')).toThrowError(expect.objectContaining({ code: 'SQL_RAISE_TEMPORARILY_GATED' }))
   })

@@ -265,10 +265,12 @@ DoltLite is patched at build time to statically register pinned sqlite-vec
 0.1.9 while dynamic extension loading remains disabled. Native sqlite-vec,
 FTS5, JSON1, and RTree are tested for Dolt transaction/branch behavior, but
 FTS, spatial search, WASM, and sqlite-vec indexes remain disabled in consensus
-IR until their cross-platform replay gates are satisfied. Exact JSON, decimal,
-and ordinary vector values are available through the deterministic compiler;
-the standalone kernel package supplies the fuller algorithms targeted for the
-next execution-profile integration.
+IR until their cross-platform replay gates are satisfied. The engine-pinned
+JSON scalar/arrow surface and deterministic trigger `RAISE` actions are enabled;
+unknown functions, collations, modules, and table-valued functions fail during
+compilation. Exact JSON, decimal, and ordinary vector values are available
+through the deterministic compiler. See the [extension profile](docs/extensions.md)
+for the native-versus-consensus boundary.
 
 Before production use, the remaining work is operational hardening: a reviewed
 distribution of the small DoltLite authorizer shim, OS-backed keystores,

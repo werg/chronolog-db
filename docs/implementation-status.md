@@ -82,8 +82,8 @@ determinism/conformance work:
 - multirow `INSERT ... SELECT`, `CREATE TABLE ... AS SELECT`, and `UPDATE ...
   FROM` without an input/source uniqueness proof, plus order-sensitive conflict
   modes;
-- JSON arrow operators, trigger `RAISE`, registered functions/collations,
-  virtual tables, and non-pragma table-valued functions; and
+- external registered functions/collations, virtual tables, and non-pragma
+  table-valued functions;
 - `ANALYZE` and `REINDEX` replay conformance.
 
 Transaction control, attachment, temporary objects, stateful pragmas, dynamic

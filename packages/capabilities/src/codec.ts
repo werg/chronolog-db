@@ -2,6 +2,7 @@ import {
   DOMAINS,
   assertCanonicalCbor,
   assertKnownIntegerKeys,
+  bytesToHex,
   encodeCanonicalCbor,
   expectArray,
   expectBytes,
@@ -170,6 +171,7 @@ function genesisToCbor(value: GenesisManifest): CborValue {
   protocolInvariant(value.rootAdminPublicKey.length === 32, 'SCHEMA_INVALID', 'Genesis root key must contain 32 bytes')
   protocolInvariant(value.recoveryPublicKeys.length === 3 && value.recoveryPublicKeys.every((key) => key.length === 32), 'SCHEMA_INVALID', 'Genesis requires exactly three 32-byte recovery keys')
   protocolInvariant(value.recoveryThreshold === 2n, 'SCHEMA_INVALID', 'V0.1 recovery threshold must be two of three')
+  protocolInvariant(new Set(value.recoveryPublicKeys.map(bytesToHex)).size === 3, 'SCHEMA_INVALID', 'Genesis recovery keys must be distinct')
   protocolInvariant(value.validationPolicies.length > 0, 'SCHEMA_INVALID', 'Genesis requires at least one validation policy')
   return integerMap([
     [0, 1n], [1, value.groupId], [2, value.schemaId], [3, value.rootAdminPublicKey],

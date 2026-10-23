@@ -51,6 +51,33 @@ transfer medium is an operator action after the three independent copies have
 been tested. Do not treat three files on one medium, three secrets under one OS
 account, or three shares held by one person as a quorum.
 
+### Other key providers (opt-in, unverified)
+
+`CHRONOLOG_SECRET_STORE` also accepts `macos-keychain`, `windows-dpapi`, and
+`command` (a hardware-token or vault helper named by an absolute
+`CHRONOLOG_SECRET_COMMAND`, with optional JSON `CHRONOLOG_SECRET_COMMAND_ARGS`,
+allow-listed `CHRONOLOG_SECRET_COMMAND_ENV` names, and
+`CHRONOLOG_SECRET_COMMAND_TIMEOUT_MS`). They are implemented and covered by unit
+tests against fake command runners and a real scripted child process on Linux,
+but they are **UNVERIFIED on real macOS, Windows, or hardware tokens**. Treat
+them as experimental until an operator has run them on the target host; no
+release gate depends on them. Every write is read back, and an unknown provider,
+a provider selected on the wrong platform, or a missing secret fails closed
+rather than falling back to inline JSON. Secret values travel on stdin only;
+tool stderr is dropped from errors for operations that carry secrets.
+
+Residual exposures:
+
+- Reference names, the service namespace, and any keychain path or helper fixed
+  arguments appear in process arguments and are visible to the same user.
+- macOS Keychain and Windows DPAPI protect against other users, not against
+  other processes running as the daemon's own account, which can read the item.
+  The Windows provider is a DPAPI-protected file store, not Credential Manager.
+- The Linux Secret Service provider runs `secret-tool` with the daemon's full
+  environment; the other providers run tools with a scrubbed environment.
+- A `command` helper is fully trusted: it sees every secret and reference, and
+  it alone is responsible for PIN handling, durability, and non-extractability.
+
 Recovery signing itself is network-independent:
 
 ```sh

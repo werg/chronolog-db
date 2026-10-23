@@ -1,5 +1,13 @@
 # FTS5, sqlite-vec, Spatial, and Deterministic WASM Implementation
 
+> **ARCHIVED - SUPERSEDED. Not an implementation requirement.**
+> This document describes the relational-IR design that was replaced by the
+> SQL-first cutover (commit `dca58eb`, 2026-07-15). It was moved to
+> `docs/archive/` on 2026-10-23 at repository commit `caa8dcb` and is kept
+> unchanged (apart from this banner and repaired links) for design history only.
+> Current authority: the [extension profile](../../extensions.md) and the [SQLite compatibility ledger](../../sqlite-compatibility-ledger.json), which alone decide which native features are enabled. See the [documentation index](../../README.md).
+
+
 Status: historical extension design and future gate reference; no feature is
 enabled except as recorded by the active compatibility ledger
 

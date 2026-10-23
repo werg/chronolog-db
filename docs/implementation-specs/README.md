@@ -29,22 +29,23 @@ The current implementation is governed by:
 When these sources conflict, Specifications 10 and 11 define semantics and the
 compatibility ledger determines whether a surface is currently enabled.
 
-## Historical relational-IR design series
+## Historical relational-IR design series (archived)
 
-Specifications 1–9 record the superseded relational-IR implementation plan.
+Specifications 1–9 record the superseded relational-IR implementation plan and
+now live under [`docs/archive/`](../archive/).
 They remain useful background for package boundaries, deterministic kernels,
 native-extension threat analysis, and conformance methodology, but they do not
 define the current signed transaction representation or client API:
 
-1. [Direct prototype cutover](01-direct-cutover.md)
-2. [Canonical values and relational IR](02-canonical-ir.md)
-3. [Schema, compiler, and execution manifest](03-schema-compiler.md)
-4. [Reducer and DoltLite materializer](04-reducer-materializer.md)
-5. [Protocol, node, validation, and transport](05-protocol-node.md)
-6. [Client, RPC, schema tooling, and reactive APIs](06-client-rpc-reactive.md)
-7. [Deterministic kernels](07-deterministic-kernels.md)
-8. [FTS5, sqlite-vec, spatial, and deterministic WASM](08-native-extensions.md)
-9. [Conformance and delivery](09-conformance-delivery.md)
+1. [Direct prototype cutover](../archive/implementation-specs/01-direct-cutover.md)
+2. [Canonical values and relational IR](../archive/implementation-specs/02-canonical-ir.md)
+3. [Schema, compiler, and execution manifest](../archive/implementation-specs/03-schema-compiler.md)
+4. [Reducer and DoltLite materializer](../archive/implementation-specs/04-reducer-materializer.md)
+5. [Protocol, node, validation, and transport](../archive/implementation-specs/05-protocol-node.md)
+6. [Client, RPC, schema tooling, and reactive APIs](../archive/implementation-specs/06-client-rpc-reactive.md)
+7. [Deterministic kernels](../archive/implementation-specs/07-deterministic-kernels.md)
+8. [FTS5, sqlite-vec, spatial, and deterministic WASM](../archive/implementation-specs/08-native-extensions.md)
+9. [Conformance and delivery](../archive/implementation-specs/09-conformance-delivery.md)
 
 Any statement in Specifications 1–9 requiring relational IR, schema IR,
 generated consensus SQL, typed-IR-only clients, or removal of signed SQL is

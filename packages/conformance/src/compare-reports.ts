@@ -4,7 +4,15 @@ import { pathToFileURL } from 'node:url'
 
 import { assertConformanceReport, type ConformanceReport } from './conformance-report.js'
 
-export async function compareConformanceReports(directory: string): Promise<readonly ConformanceReport[]> {
+export interface CompareOptions {
+  /** Platform prefixes (for example `linux`, `darwin`) that at least one report must match. */
+  readonly requiredPlatforms?: readonly string[]
+}
+
+export async function compareConformanceReports(
+  directory: string,
+  options: CompareOptions = {},
+): Promise<readonly ConformanceReport[]> {
   const names = (await readdir(directory, { recursive: true }))
     .filter((name) => name.endsWith('.json'))
     .sort()
@@ -18,14 +26,43 @@ export async function compareConformanceReports(directory: string): Promise<read
   if (expected === undefined || reports.some((report) => report.deterministic.portableSemanticDigest !== expected)) {
     throw new Error('CONFORMANCE_PORTABLE_PLATFORM_MISMATCH')
   }
+  const commit = reports[0]?.operational.sourceCommit
+  if (reports.some((report) => report.operational.sourceCommit !== commit)) {
+    throw new Error('CONFORMANCE_SOURCE_COMMIT_MISMATCH')
+  }
+  for (const required of options.requiredPlatforms ?? []) {
+    if (!reports.some((report) => report.operational.platform.startsWith(required))) {
+      throw new Error(`CONFORMANCE_REQUIRED_PLATFORM_MISSING:${required}`)
+    }
+  }
   return reports
 }
 
+function parseArgs(argv: readonly string[]): { readonly directory: string; readonly requiredPlatforms: readonly string[] } {
+  const requiredPlatforms: string[] = []
+  let directory: string | undefined
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index]
+    if (arg === '--require-platform') {
+      const value = argv[index + 1]
+      if (value === undefined || value.startsWith('--')) throw new Error('CONFORMANCE_REQUIRE_PLATFORM_VALUE_MISSING')
+      requiredPlatforms.push(value)
+      index += 1
+    } else if (arg !== undefined && arg.startsWith('--')) {
+      throw new Error(`CONFORMANCE_UNKNOWN_FLAG:${arg}`)
+    } else if (arg !== undefined && directory === undefined) {
+      directory = arg
+    }
+  }
+  return { directory: resolve(directory ?? 'artifacts/conformance-platforms'), requiredPlatforms }
+}
+
 async function main(): Promise<void> {
-  const directory = resolve(process.argv[2] ?? 'artifacts/conformance-platforms')
-  const reports = await compareConformanceReports(directory)
+  const { directory, requiredPlatforms } = parseArgs(process.argv.slice(2))
+  const reports = await compareConformanceReports(directory, { requiredPlatforms })
   process.stdout.write(`${JSON.stringify({
     format: 'chronolog-conformance-comparison-v1',
+    sourceCommit: reports[0]?.operational.sourceCommit,
     portableSemanticDigest: reports[0]?.deterministic.portableSemanticDigest,
     platforms: reports.map((report) => report.operational.platform).sort(),
   }, null, 2)}\n`)

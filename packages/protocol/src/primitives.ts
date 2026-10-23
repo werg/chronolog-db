@@ -24,6 +24,7 @@ export const DOMAINS = {
   epochManifest: 'chronolog/epoch-manifest/v1',
   epochWrap: 'chronolog/epoch-wrap/v1',
   epochPayload: 'chronolog/epoch-payload/v1',
+  drillEvidence: 'chronolog/drill-evidence/v1',
 } as const
 
 export type ProtocolDomain = (typeof DOMAINS)[keyof typeof DOMAINS]

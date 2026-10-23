@@ -1,5 +1,13 @@
 # Deterministic Kernel Implementation
 
+> **ARCHIVED - SUPERSEDED. Not an implementation requirement.**
+> This document describes the relational-IR design that was replaced by the
+> SQL-first cutover (commit `dca58eb`, 2026-07-15). It was moved to
+> `docs/archive/` on 2026-10-23 at repository commit `caa8dcb` and is kept
+> unchanged (apart from this banner and repaired links) for design history only.
+> Current authority: [Specification 10](../../implementation-specs/10-deterministic-sql-transactions.md), [Specification 11](../../implementation-specs/11-transaction-results-and-ordered-mutations.md), and the [SQLite compatibility ledger](../../sqlite-compatibility-ledger.json); kernel requirements apply only where the active execution profile enables them (`packages/kernels`). See the [documentation index](../../README.md).
+
+
 Status: historical relational-IR work package; kernel requirements apply only
 when enabled by the active SQL execution profile and compatibility ledger
 

@@ -84,7 +84,11 @@ determinism/conformance work:
   modes;
 - external registered functions/collations, virtual tables, and non-pragma
   table-valued functions;
-- `ANALYZE` and `REINDEX` replay conformance.
+- `ANALYZE` and `REINDEX` replay conformance;
+- ambient-state surfaces: `MATCH`/`REGEXP` operators (until registered
+  extensions exist), current-time literals (`CURRENT_TIME` and friends, until
+  signed time is wired), `random()`/`randomblob()`, and the connection-state
+  functions `changes()`, `last_insert_rowid()`, and `total_changes()`.
 
 Transaction control, attachment, temporary objects, stateful pragmas, dynamic
 extensions, Dolt control functions, physical maintenance such as `VACUUM`, and
@@ -111,9 +115,11 @@ See [production execution](production-execution.md) for the decision and the
 criteria for reconsidering workerd.
 
 `CHRONOLOG_STATIC_MEMBERSHIP_FILE` is retained as an explicit legacy/testing
-override. Production key custody, packaging, and a polished operator CLI remain
-release-hardening work; the bootstrap recovery keys must not remain co-located
-for a real deployment.
+override. Custody export/purge, self-verifying native distributions, and
+`chronolog doctor` have shipped. Remaining release-hardening work is an
+independent custodian ceremony, verification of the non-Linux and hardware key
+providers on real platforms, and prior-release upgrade evidence; the bootstrap
+recovery keys must not remain co-located for a real deployment.
 
 Linux pilots may set `CHRONOLOG_SECRET_STORE=secret-service`; the daemon then
 atomically migrates inline identity, epoch, governance-recipient, and recovery
@@ -143,7 +149,7 @@ The current internal authorizer/protocol assessment and unresolved release
 findings are recorded in [the threat review](security-threat-review.md).
 
 The broader delivery criteria remain in the
-[conformance specification](implementation-specs/09-conformance-delivery.md),
+[conformance specification](archive/implementation-specs/09-conformance-delivery.md),
 [deterministic SQL specification](implementation-specs/10-deterministic-sql-transactions.md),
 and [transaction result specification](implementation-specs/11-transaction-results-and-ordered-mutations.md).
 

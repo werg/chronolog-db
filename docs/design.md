@@ -5,6 +5,14 @@ are superseded by
 [Specification 10](implementation-specs/10-deterministic-sql-transactions.md)
 and [Specification 11](implementation-specs/11-transaction-results-and-ordered-mutations.md).
 
+Authority map: sections 7, 12, 13, 15, and 19 describe the removed
+relational-IR transaction representation, schema manifest, and delivery phases
+and must not be used as requirements. Sections 1-6, 8-11, 14, and 16-18 (membership,
+validator attestation, stable ordering, watermarks, replay, encryption, and
+security consequences) remain valid protocol background wherever they do not
+mention relational IR or typed commands. Sections 20-21 invariants apply only
+where Specifications 10/11 or the compatibility ledger reaffirm them.
+
 Date: 2026-07-13
 
 ## 1. Abstract
@@ -992,9 +1000,9 @@ notarized earlier and merely hidden, it retains that earlier fixed position.
 ## 19. Initial implementation plan
 
 The phases below are the protocol-level summary. The executable architecture is
-specified in [implementation-design.md](implementation-design.md), and detailed
+specified in [implementation-design.md](archive/implementation-design.md), and detailed
 work items and release gates are in
-[implementation-plan.md](implementation-plan.md).
+[implementation-plan.md](archive/implementation-plan.md).
 
 ### Phase 1: Protocol model
 

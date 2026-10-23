@@ -1,19 +1,27 @@
 # Chronolog DB Detailed Implementation Plan
 
+> **ARCHIVED - SUPERSEDED. Not an implementation requirement.**
+> This document describes the relational-IR design that was replaced by the
+> SQL-first cutover (commit `dca58eb`, 2026-07-15). It was moved to
+> `docs/archive/` on 2026-10-23 at repository commit `caa8dcb` and is kept
+> unchanged (apart from this banner and repaired links) for design history only.
+> Current authority: [Upcoming work](../../upcoming.md) (ordered roadmap) and [Implementation status](../implementation-status.md) (current boundary), with semantics in [Specification 10](../implementation-specs/10-deterministic-sql-transactions.md) and [Specification 11](../implementation-specs/11-transaction-results-and-ordered-mutations.md). See the [documentation index](../README.md).
+
+
 Status: Historical delivery plan. The completed SQL-first replacement is
 specified by
-[Specification 10](implementation-specs/10-deterministic-sql-transactions.md).
+[Specification 10](../implementation-specs/10-deterministic-sql-transactions.md).
 
 Date: 2026-07-13
 
 > This document records the plan that produced the current end-to-end
 > prototype. The direct replacement of its raw-SQL consensus path is specified
-> by the [deterministic runtime implementation suite](implementation-specs/README.md).
+> by the [deterministic runtime implementation suite](../implementation-specs/README.md).
 > Chronolog is unreleased: the replacement edits formats and APIs in place and
 > recreates development state. No compatibility or migration work is required.
 
 This plan delivers the architecture in [implementation-design.md](implementation-design.md)
-and the semantics in [design.md](design.md). It is ordered around risk removal
+and the semantics in [design.md](../design.md). It is ordered around risk removal
 and executable vertical slices rather than package completion in isolation.
 
 ## 1. Delivery objective
@@ -939,8 +947,8 @@ cutover in [the detailed delivery specification](implementation-specs/09-conform
 
 ## 20. References
 
-- [Chronolog DB protocol design](design.md)
-- [Deterministic runtime implementation specifications](implementation-specs/README.md)
+- [Chronolog DB protocol design](../design.md)
+- [Deterministic runtime implementation specifications](../implementation-specs/README.md)
 - [Chronolog DB implementation design](implementation-design.md)
 - [DoltLite](https://github.com/dolthub/doltlite)
 - [SSB-DB2](https://github.com/ssbc/ssb-db2)

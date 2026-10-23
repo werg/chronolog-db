@@ -122,8 +122,8 @@ for install/upgrade gates.
 Every consumed feed is checked by author, sequence, record ID, and previous
 link. A conflict is persisted to `feed-continuity.json`, makes the node
 non-writable, and appears in status/metrics. The repair primitive accepts only
-a complete prefix ending at an explicitly trusted head, but operators must not
-apply it until the trusted snapshot/full derived-state rebuild workflow lands.
+a complete prefix ending at an explicitly trusted head and is applied only
+through the offline signed-snapshot workflow described next.
 
 Signed snapshot manifests and the offline snapshot CLI now provide exact
 archive hashing, signer/group/manifest/rollback checks, independent staged

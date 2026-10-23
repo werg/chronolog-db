@@ -26,7 +26,9 @@ The core behavior is implemented end to end:
 - A long-running daemon, HTTP/NDJSON streaming RPC, TypeScript client, React
   hooks, and CLI.
 
-The protocol background is described in [the design](docs/design.md). The
+The [documentation index](docs/README.md) classifies every document as
+normative, operational, or historical. The protocol background is described in
+[the design](docs/design.md). The
 current deterministic transaction architecture is specified in
 [deterministic SQL transactions](docs/implementation-specs/10-deterministic-sql-transactions.md),
 [transaction results and ordered mutations](docs/implementation-specs/11-transaction-results-and-ordered-mutations.md),
@@ -300,9 +302,9 @@ against `ChronologNode` directly.
 DoltLite is patched at build time to statically register pinned sqlite-vec
 0.1.9 while dynamic extension loading remains disabled. Native sqlite-vec,
 FTS5, JSON1, and RTree are tested for Dolt transaction/branch behavior, but
-FTS, spatial search, WASM, and sqlite-vec indexes remain disabled in consensus
-IR until their cross-platform replay gates are satisfied. The engine-pinned
-JSON scalar/arrow surface and deterministic trigger `RAISE` actions are enabled;
+FTS, spatial search, WASM, and sqlite-vec indexes remain disabled in the
+consensus SQL profile until their cross-platform replay gates are satisfied.
+The engine-pinned JSON scalar/arrow surface and deterministic trigger `RAISE` actions are enabled;
 unknown functions, collations, modules, and table-valued functions fail during
 compilation. Exact JSON, decimal, and ordinary vector values are available
 through the deterministic compiler. See the [extension profile](docs/extensions.md)
@@ -312,4 +314,4 @@ Before production use, the remaining work is witnessed pilot execution of the
 implemented custody, snapshot/fork, blob, traversal, alerting, and upgrade
 workflows; non-Linux/hardware-backed key providers; resolution of recorded
 security findings; and an independent external security review. The
-implementation plan retains the full acceptance criteria.
+[upcoming work](upcoming.md) retains the full acceptance criteria.

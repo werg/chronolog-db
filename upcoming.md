@@ -145,6 +145,11 @@ Status: complete
 - Characterize `ANALYZE` and `REINDEX`; keep them gated if physical effects
   cannot be made replay-safe.
 
+Note: FTS, sqlite-vec, spatial (RTree), and WASM are characterized natively
+(transaction, branch-isolation, and reopen tests) but remain disabled in the
+consensus profile; they are not active consensus features. See
+[extensions](docs/extensions.md) and the SQLite compatibility ledger.
+
 Acceptance:
 
 - [x] Every enabled extension has a pinned implementation digest, reference

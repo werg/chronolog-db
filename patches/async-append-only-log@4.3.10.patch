@@ -1,4 +1,5 @@
 diff --git a/index.js b/index.js
+index dc0fecdf2d4b24049118761fc67394ce39271937..e18735aa767db2f2d8b850ecd45b727305dc41d6 100644
 --- a/index.js
 +++ b/index.js
 @@ -5,6 +5,8 @@
@@ -10,7 +11,7 @@ diff --git a/index.js b/index.js
  const AtomicFile = require('atomic-file-rw')
  const debounce = require('lodash.debounce')
  const isBufferZero = require('is-buffer-zero')
-@@ -49,6 +51,9 @@
+@@ -49,6 +51,9 @@ module.exports = function AsyncAppendOnlyLog(filename, opts) {
    const cache = new Cache({ maxSize: 1024 }) // This is potentially 64 MiB!
    const raf = RAF(filename)
    const statsFilename = filename + '.stats'
@@ -20,10 +21,20 @@ diff --git a/index.js b/index.js
    const blockSize = (opts && opts.blockSize) || DEFAULT_BLOCK_SIZE
    const codec = (opts && opts.codec) || DEFAULT_CODEC
    const writeTimeout = (opts && opts.writeTimeout) || DEFAULT_WRITE_TIMEOUT
-@@ -69,6 +74,80 @@
+@@ -69,6 +74,90 @@ module.exports = function AsyncAppendOnlyLog(filename, opts) {
    let deletedBytes = 0
    const since = Obv() // offset of last written record
    let compaction = null
++  // ssb-db2 closes the log before secret-stack closes peer connections, so
++  // EBT can still append replicated messages after close() has started. A
++  // late append would schedule a block write against the closed file and
++  // crash the process from the debounced writer. Reject it instead; peers
++  // resend the message after restart.
++  let closing = false
++
++  function closingErr() {
++    return new Error('async-append-only-log is closing')
++  }
 +
 +  // async-append-only-log rewrites the mutable tail block in place. A process
 +  // kill during a later rewrite can otherwise tear records which were already
@@ -101,7 +112,7 @@ diff --git a/index.js b/index.js
    const compactionProgress = Obv()
    if (typeof window !== 'undefined') {
      // fs sync not working in browser
-@@ -171,15 +250,34 @@
+@@ -171,15 +260,34 @@ module.exports = function AsyncAppendOnlyLog(filename, opts) {
  
    function writeWithFSync(blockStart, blockBuf, successValue, cb) {
      writeLock(function onWriteLockReleased(unlock) {
@@ -138,3 +149,27 @@ diff --git a/index.js b/index.js
        })
      })
    }
+@@ -374,6 +482,7 @@ module.exports = function AsyncAppendOnlyLog(filename, opts) {
+   }
+ 
+   function append(data, cb) {
++    if (closing) return cb(closingErr())
+     if (compaction) {
+       waitingCompaction.push(() => append(data, cb))
+       return
+@@ -392,6 +501,7 @@ module.exports = function AsyncAppendOnlyLog(filename, opts) {
+     if (!Array.isArray(dataArray)) {
+       return cb(appendTransactionWantsArrayErr())
+     }
++    if (closing) return cb(closingErr())
+     if (compaction) {
+       waitingCompaction.push(() => appendTransaction(dataArray, cb))
+       return
+@@ -601,6 +711,7 @@ module.exports = function AsyncAppendOnlyLog(filename, opts) {
+   }
+ 
+   function close(cb) {
++    closing = true
+     onDrain(function closeAfterHavingDrained() {
+       onDeletesFlushed(function closeAfterDeletesFlushed() {
+         for (const stream of self.streams) stream.abort(true)

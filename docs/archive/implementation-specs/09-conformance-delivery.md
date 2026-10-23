@@ -1,5 +1,13 @@
 # Conformance, Testing, and Delivery Implementation
 
+> **ARCHIVED - SUPERSEDED. Not an implementation requirement.**
+> This document describes the relational-IR design that was replaced by the
+> SQL-first cutover (commit `dca58eb`, 2026-07-15). It was moved to
+> `docs/archive/` on 2026-10-23 at repository commit `caa8dcb` and is kept
+> unchanged (apart from this banner and repaired links) for design history only.
+> Current authority: [Release hardening](../../release-hardening.md), [Upcoming work](../../../upcoming.md), and the executable gates `pnpm conformance`, `pnpm conformance:sqlite`, and `pnpm conformance:production`. See the [documentation index](../../README.md).
+
+
 Status: historical relational-IR delivery plan; its general conformance
 methods remain roadmap input, while Specifications 10/11 and the compatibility
 ledger define the active feature contract

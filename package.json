@@ -24,6 +24,7 @@
     "release:metadata": "pnpm build && tsx tools/generate-release-metadata.ts --output artifacts/release",
     "release:distribution": "tsx tools/build-distribution.ts --output artifacts/distribution",
     "test:distribution-upgrade": "tsx tools/test-distribution-upgrade.ts --directory artifacts/distribution",
+    "drill": "tsx tools/drill.ts",
     "conformance": "tsx packages/conformance/src/conformance-report.ts --output artifacts/conformance/report.json",
     "conformance:production": "tsx packages/conformance/src/conformance-report.ts --require-feature deployment-native-daemon-v1 --output artifacts/conformance/production-native.json",
     "conformance:compare": "tsx packages/conformance/src/compare-reports.ts",
@@ -38,6 +39,7 @@
     "chaos:smoke": "tsx packages/chaos/src/cli.ts run smoke",
     "chaos:crash": "tsx packages/chaos/src/cli.ts run crash",
     "chaos:stress": "tsx packages/chaos/src/cli.ts run stress",
+    "docs:check": "node tools/check-doc-links.mjs",
     "prepare": "husky"
   },
   "devDependencies": {

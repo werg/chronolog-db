@@ -1,14 +1,22 @@
 # Chronolog DB Implementation Design
 
+> **ARCHIVED - SUPERSEDED. Not an implementation requirement.**
+> This document describes the relational-IR design that was replaced by the
+> SQL-first cutover (commit `dca58eb`, 2026-07-15). It was moved to
+> `docs/archive/` on 2026-10-23 at repository commit `caa8dcb` and is kept
+> unchanged (apart from this banner and repaired links) for design history only.
+> Current authority: [Specification 10](../implementation-specs/10-deterministic-sql-transactions.md), [Specification 11](../implementation-specs/11-transaction-results-and-ordered-mutations.md), and the [Implementation status](../implementation-status.md) package map; protocol background remains in [the protocol design](../design.md). See the [documentation index](../README.md).
+
+
 Status: Historical implementation background. The SQL-first runtime is defined
-by the [implementation specification suite](implementation-specs/README.md).
+by the [implementation specification suite](../implementation-specs/README.md).
 
 Date: 2026-07-13
 
-This document translates the [protocol design](design.md) into an executable
+This document translates the [protocol design](../design.md) into an executable
 software architecture. The accompanying [implementation plan](implementation-plan.md)
 defines the original scaffold delivery sequence. The
-[deterministic runtime implementation specifications](implementation-specs/README.md)
+[deterministic runtime implementation specifications](../implementation-specs/README.md)
 define the direct replacement now being implemented.
 
 ## 1. Scope
@@ -422,11 +430,11 @@ affected order position.
 
 ## 12. Deterministic relational reducer
 
-The [Chronolog deterministic SQL dialect and relational IR](sql-dialect.md) is
+The [Chronolog deterministic SQL dialect and relational IR](../sql-dialect.md) is
 implemented directly by replacing the unreleased raw-SQL transaction path.
 There is no compatibility reducer or stored-data migration. The complete
 subsystem design is in the
-[implementation specification suite](implementation-specs/README.md). The
+[implementation specification suite](../implementation-specs/README.md). The
 authorizer remains defense in depth for canonically compiled IR.
 
 ### 12.1 Backend authorizer enforcement
@@ -851,7 +859,7 @@ refuses attestation/materialization.
 
 ## 26. References
 
-- [Chronolog DB protocol design](design.md)
+- [Chronolog DB protocol design](../design.md)
 - [Chronolog DB implementation plan](implementation-plan.md)
 - [DoltLite repository and API overview](https://github.com/dolthub/doltlite)
 - [DoltLite releases](https://github.com/dolthub/doltlite/releases)

@@ -1,5 +1,13 @@
 # Schema, SQLite Compiler, and Execution Manifest Implementation
 
+> **ARCHIVED - SUPERSEDED. Not an implementation requirement.**
+> This document describes the relational-IR design that was replaced by the
+> SQL-first cutover (commit `dca58eb`, 2026-07-15). It was moved to
+> `docs/archive/` on 2026-10-23 at repository commit `caa8dcb` and is kept
+> unchanged (apart from this banner and repaired links) for design history only.
+> Current authority: [Specification 10](../../implementation-specs/10-deterministic-sql-transactions.md) (compiler boundary, execution manifest, DDL/DML) and the [SQLite compatibility ledger](../../sqlite-compatibility-ledger.json); the implementation is `packages/compiler-sqlite`. See the [documentation index](../../README.md).
+
+
 Status: historical relational-IR compiler design; superseded where it conflicts
 with Specifications 10 and 11
 

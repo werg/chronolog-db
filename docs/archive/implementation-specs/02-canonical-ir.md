@@ -1,5 +1,13 @@
 # Canonical Values and Relational IR Implementation
 
+> **ARCHIVED - SUPERSEDED. Not an implementation requirement.**
+> This document describes the relational-IR design that was replaced by the
+> SQL-first cutover (commit `dca58eb`, 2026-07-15). It was moved to
+> `docs/archive/` on 2026-10-23 at repository commit `caa8dcb` and is kept
+> unchanged (apart from this banner and repaired links) for design history only.
+> Current authority: [Specification 10](../../implementation-specs/10-deterministic-sql-transactions.md) (signed SQL program, bindings) and [Specification 11](../../implementation-specs/11-transaction-results-and-ordered-mutations.md) (canonical values and results); the surviving value/manifest codecs live in `packages/ir`. See the [documentation index](../../README.md).
+
+
 Status: historical relational-IR design; not the active signed transaction
 contract
 
@@ -11,7 +19,7 @@ ASTs, stable codecs, validation stages, traversal, builders, and resource
 bounds. It does not cover SQLite lowering or database execution.
 
 The normative language semantics remain in
-[the SQL dialect specification](../sql-dialect.md). This document fixes the
+[the SQL dialect specification](../../sql-dialect.md). This document fixes the
 code structure used to implement those semantics.
 
 ## 2. `@chronolog/canonical`

@@ -59,6 +59,26 @@ it('replays a checksummed tail-block journal before scanning the append log', as
   }
 })
 
+it('rejects appends that race close instead of crashing the debounced writer', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'chronolog-aaol-close-'))
+  const path = join(directory, 'log.bipf')
+  try {
+    let log = openLog(path)
+    const offset = await append(log, Buffer.from('before-close'))
+    const closed = close(log)
+    await expect(append(log, Buffer.from('replicated-after-close'))).rejects.toThrow('closing')
+    await closed
+    // Outlive the debounced block writer; an accepted late append would throw from it.
+    await new Promise((resolve) => setTimeout(resolve, 500))
+
+    log = openLog(path)
+    expect((await get(log, offset)).toString()).toBe('before-close')
+    await close(log)
+  } finally {
+    await rm(directory, { recursive: true, force: true, maxRetries: 3 })
+  }
+})
+
 function append(log: AppendOnlyLog, value: Buffer): Promise<number> {
   return new Promise((resolve, reject) => log.append(value, (error, offset) => {
     if (error) reject(error)

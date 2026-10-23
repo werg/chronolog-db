@@ -9,7 +9,7 @@ patchedDependencies:
     hash: b8b12ba33968f3e1d16602d663535fa7db735a63d12677d1d7352e8a755a94e9
     path: patches/@dolthub__doltlite@0.11.29.patch
   async-append-only-log@4.3.10:
-    hash: e32d2cddeeea93f3bb8e6ef09b226c8711ddf526bd106a503bd31c1755ee4ed8
+    hash: 55a3c1ff32b3be72e750b732d2e78ee0bbf254c9eaeab10087fd6db28910eab0
     path: patches/async-append-only-log@4.3.10.patch
 
 importers:
@@ -4181,7 +4181,7 @@ snapshots:
       estree-walker: 3.0.3
       js-tokens: 10.0.0
 
-  async-append-only-log@4.3.10(patch_hash=e32d2cddeeea93f3bb8e6ef09b226c8711ddf526bd106a503bd31c1755ee4ed8):
+  async-append-only-log@4.3.10(patch_hash=55a3c1ff32b3be72e750b732d2e78ee0bbf254c9eaeab10087fd6db28910eab0):
     dependencies:
       '@alloc/quick-lru': 5.2.0
       atomic-file-rw: 0.3.0
@@ -5250,9 +5250,9 @@ snapshots:
     optionalDependencies:
       '@pkgjs/parseargs': 0.11.0
 
-  jitdb@7.0.7(async-append-only-log@4.3.10(patch_hash=e32d2cddeeea93f3bb8e6ef09b226c8711ddf526bd106a503bd31c1755ee4ed8)):
+  jitdb@7.0.7(async-append-only-log@4.3.10(patch_hash=55a3c1ff32b3be72e750b732d2e78ee0bbf254c9eaeab10087fd6db28910eab0)):
     dependencies:
-      async-append-only-log: 4.3.10(patch_hash=e32d2cddeeea93f3bb8e6ef09b226c8711ddf526bd106a503bd31c1755ee4ed8)
+      async-append-only-log: 4.3.10(patch_hash=55a3c1ff32b3be72e750b732d2e78ee0bbf254c9eaeab10087fd6db28910eab0)
       atomic-file-rw: 0.3.0
       binary-search-bounds: 2.0.5
       bipf: 1.9.0
@@ -6363,7 +6363,7 @@ snapshots:
 
   ssb-db2@8.1.0:
     dependencies:
-      async-append-only-log: 4.3.10(patch_hash=e32d2cddeeea93f3bb8e6ef09b226c8711ddf526bd106a503bd31c1755ee4ed8)
+      async-append-only-log: 4.3.10(patch_hash=55a3c1ff32b3be72e750b732d2e78ee0bbf254c9eaeab10087fd6db28910eab0)
       atomic-file-rw: 0.3.0
       binary-search-bounds: 2.0.5
       bipf: 1.9.0
@@ -6372,7 +6372,7 @@ snapshots:
       flumecodec: 0.0.1
       flumelog-offset: 3.4.4
       hoox: 0.0.1
-      jitdb: 7.0.7(async-append-only-log@4.3.10(patch_hash=e32d2cddeeea93f3bb8e6ef09b226c8711ddf526bd106a503bd31c1755ee4ed8))
+      jitdb: 7.0.7(async-append-only-log@4.3.10(patch_hash=55a3c1ff32b3be72e750b732d2e78ee0bbf254c9eaeab10087fd6db28910eab0))
       level: 6.0.1
       level-codec: 9.0.2
       lodash.debounce: 4.0.8

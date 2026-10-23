@@ -40,7 +40,7 @@ The principal boundaries are:
 | Partial candidate publication or crash | Private replay branch, independent reader verification, atomic head move, five-point `SIGKILL` matrix | Filesystem/hardware failure behavior still depends on the supported storage stack |
 | Replay result substitution | Protected result bytes and domain-separated digest verified on reopen | Stored-data format migration is intentionally absent in the prototype |
 | Capability or epoch rollback | Signed revision chain, exact previous digest, scoped readers, epoch chain, threshold recovery records, verified share export/purge, offline signing and threshold verification | A production quorum exists only after a recorded independent-custodian ceremony and drill |
-| Plaintext daemon private keys | Reference-only v2 config/governance documents and Linux Secret Service migration | Other OS/hardware providers and independent recovery custody remain open |
+| Plaintext daemon private keys | Reference-only v2 config/governance documents and Linux Secret Service migration; opt-in macOS Keychain, Windows DPAPI, and command-hook providers (fail closed, stdin-only secrets, write read-back) | The macOS/Windows/command providers are implemented but UNVERIFIED on real macOS, Windows, or hardware tokens; reference names appear in argv, macOS/DPAPI items are readable by any process of the same user, the Linux provider inherits the full environment, and a command helper is fully trusted. Independent recovery custody remains open |
 | Blob substitution or truncation | Per-chunk and total domain-separated digests, bounded authenticated HTTPS retrieval, verified read-through retention, content-addressed stores, outer digest/decryption/inner signature checks | No distributed reachability-aware garbage collection; blob mode remains explicit opt-in |
 | Snapshot rollback or foreign-state import | Fixed archive paths and hashes, authorized signature, group/manifest/no-rollback checks, staged production-adapter DB/log verification, fsynced atomic replacement and retained backup | Pilot restore/repair drill and platform filesystem qualification remain required |
 | RPC credential disclosure or unauthenticated remote bind | Remote bind requires bearer token; timing-safe comparison; metrics/blob routes share authentication | Bearer tokens need deployment TLS/secret rotation outside this process |
@@ -57,6 +57,8 @@ The principal boundaries are:
   exact digest verification, and immutable local read-through retention.
   Automatic garbage collection remains prohibited until a distributed
   reachability proof exists; pilot sizing must assume retained chunks.
+  A local-only reachability analysis is recorded in `docs/blob-replication.md`;
+  no collector is implemented and it would not prove remote-peer availability.
 - `SEC-003` — Snapshot export/import now hashes fixed archive paths, validates a
   staged database against signed logical evidence, retains the old database,
   atomically replaces the materializer, and forces derived-state rebuild.
@@ -80,6 +82,15 @@ The principal boundaries are:
   not an active deployment target.
 - `SEC-008` — Independent security review has not occurred. This is a release
   blocker even if all internal tests pass.
+
+## Drill evidence signing domain
+
+The `chronolog/drill-evidence/v1` signing domain was added to `DOMAINS` in
+`packages/protocol/src/primitives.ts` for release drill records (see
+[drill evidence](drill-evidence.md)). It is used only by `tools/drill.ts`, never
+by consensus or daemon code. The tool proves tamper-evidence and key-holder
+attestation only; it cannot show that distinct real people signed or that a
+drill occurred.
 
 ## Review gate
 

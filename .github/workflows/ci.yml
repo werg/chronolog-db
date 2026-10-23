@@ -25,6 +25,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
+      - run: pnpm docs:check
       - run: pnpm typecheck
       - run: pnpm test:coverage
       - run: pnpm build
@@ -80,4 +81,4 @@ jobs:
         with:
           pattern: conformance-*-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/conformance-platforms
-      - run: pnpm conformance:compare artifacts/conformance-platforms
+      - run: pnpm conformance:compare artifacts/conformance-platforms --require-platform linux --require-platform darwin

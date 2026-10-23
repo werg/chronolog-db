@@ -1,6 +1,7 @@
 # Deterministic SQLite-Compatible SQL Transactions
 
-Status: normative implementation target for the next unreleased prototype
+Status: normative contract for the unreleased SQL-first prototype (implemented;
+the compatibility ledger records which surfaces are currently enabled)
 
 This specification replaces the current schema-manifest and canonical
 relational-IR transaction design with signed SQL source interpreted by the
